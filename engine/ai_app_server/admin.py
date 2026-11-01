@@ -551,6 +551,31 @@ def admin_router():
         store.audit(actor["username"], "settings_updated", ", ".join(fields))
         return {"ok":True,"settings":store.settings()}
 
+    @router.get("/mcp")
+    def mcp_status(request: Request):
+        require(request, "view_service")
+        from .mcp_module import read_config
+        setting = read_config(request.app.state.store.directory)
+        return {"enabled": setting["enabled"], "token_configured": bool(setting["token_hash"]),
+                "endpoint": "/mcp", "tools": request.app.state.mcp_registry.descriptions(),
+                "protocol": "2026-07-28", "tool_load_error": request.app.state.mcp_load_error}
+
+    @router.post("/mcp/enable")
+    def mcp_enable(request: Request):
+        admin = require(request, "manage_settings", write=True)
+        from .mcp_module import enable
+        token = enable(request.app.state.store.directory)
+        request.app.state.store.audit(admin["username"], "mcp_enabled_or_rotated")
+        return {"ok": True, "token": token, "warning": "Save this token now. It cannot be displayed again."}
+
+    @router.post("/mcp/disable")
+    def mcp_disable(request: Request):
+        admin = require(request, "manage_settings", write=True)
+        from .mcp_module import disable
+        disable(request.app.state.store.directory)
+        request.app.state.store.audit(admin["username"], "mcp_disabled")
+        return {"ok": True}
+
     @router.get("/audit")
     def audit(request: Request):
         require(request, "view_audit")

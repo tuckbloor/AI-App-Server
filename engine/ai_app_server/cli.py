@@ -53,10 +53,20 @@ def main(argv=None):
     backup.add_argument("--to", type=Path, required=True)
     backup.add_argument("--data-dir", type=Path, default=None)
 
+    verify = sub.add_parser("verify-backup", help="Verify an automatic upgrade snapshot without changing the server")
+    verify.add_argument("script", type=Path)
+    verify.add_argument("--snapshot", type=Path, required=True)
+    verify.add_argument("--data-dir", type=Path, default=None)
+
     args = parser.parse_args(argv)
     if not args.script.is_file():
         parser.error(f"Application not found: {args.script}")
     data_dir = project_data_dir(args.script, args.data_dir)
+    if args.command == "verify-backup":
+        from .recovery import verify_snapshot
+        result = verify_snapshot(args.snapshot)
+        print(f"Verified backup: {args.snapshot} ({len(result['files'])} protected files)")
+        return 0
     if args.command == "setup-admin":
         from .storage import normalized_email, is_strong_password, verify_password
         store = Store(data_dir)

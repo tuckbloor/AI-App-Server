@@ -66,9 +66,9 @@ function showRecoveryRoute(){
  if(params.has('verify-email')){renderTokenForm('verify',params.get('verify-email'));return true}
  return false;
 }
-const navigation=[['dashboard','Dashboard','dashboard'],['security','Security','shield'],['users','Users','users'],['roles','Roles','roles'],['permissions','Permissions','permissions'],['databases','Databases','database'],['maintenance','Maintenance','maintenance'],['service','Service','server'],['settings','Settings','settings'],['audit','Audit Log','audit']];
+const navigation=[['dashboard','Dashboard','dashboard'],['security','Security','shield'],['users','Users','users'],['roles','Roles','roles'],['permissions','Permissions','permissions'],['databases','Databases','database'],['maintenance','Maintenance','maintenance'],['service','Service','server'],['mcp','MCP','settings'],['settings','Settings','settings'],['audit','Audit Log','audit']];
 function renderShell(){
- root.innerHTML=`<div class="shell"><aside class="sidebar"><div class="logo"><span class="logo-icon">${ic('server')}</span><div><strong>AI App Server</strong><small>Control Center</small></div></div><div class="nav-label">WORKSPACE</div><nav>${navigation.map(([p,label,icon])=>`<button class="nav-item ${state.page===p?'active':''}" data-nav="${p}" title="${label}">${ic(icon)}<span>${label}</span></button>`).join('')}</nav><div class="sidebar-bottom"><div class="sidebar-health"><span class="online-dot"></span> Server online</div><small>v0.8.0 • Independently hosted</small></div></aside><div class="workspace"><header class="topbar"><div class="bread"><span>Server Administration</span><span class="slash">/</span><strong id="breadcrumb">${navigation.find(n=>n[0]===state.page)?.[1]}</strong></div><div class="top-actions"><span class="environment"><span class="online-dot"></span> Self-hosted</span><span class="divider-v"></span><button class="user-chip" data-action="account" title="Change password"><span class="avatar">${esc(state.user.username.slice(0,2).toUpperCase())}</span><span>${esc(state.user.username)}</span></button><button class="btn btn-outline btn-small" data-action="logout" title="Sign out">${ic('logout')}</button></div></header><main class="main" id="main"><div class="loading"><div class="spinner"></div></div></main></div></div>`;
+ root.innerHTML=`<div class="shell"><aside class="sidebar"><div class="logo"><span class="logo-icon">${ic('server')}</span><div><strong>AI App Server</strong><small>Control Center</small></div></div><div class="nav-label">WORKSPACE</div><nav>${navigation.map(([p,label,icon])=>`<button class="nav-item ${state.page===p?'active':''}" data-nav="${p}" title="${label}">${ic(icon)}<span>${label}</span></button>`).join('')}</nav><div class="sidebar-bottom"><div class="sidebar-health"><span class="online-dot"></span> Server online</div><small>v0.9.1 • Independently hosted</small></div></aside><div class="workspace"><header class="topbar"><div class="bread"><span>Server Administration</span><span class="slash">/</span><strong id="breadcrumb">${navigation.find(n=>n[0]===state.page)?.[1]}</strong></div><div class="top-actions"><span class="environment"><span class="online-dot"></span> Self-hosted</span><span class="divider-v"></span><button class="user-chip" data-action="account" title="Change password"><span class="avatar">${esc(state.user.username.slice(0,2).toUpperCase())}</span><span>${esc(state.user.username)}</span></button><button class="btn btn-outline btn-small" data-action="logout" title="Sign out">${ic('logout')}</button></div></header><main class="main" id="main"><div class="loading"><div class="spinner"></div></div></main></div></div>`;
 }
 function header(eyebrow,title,sub,buttons=''){return `<div class="page-head"><div><div class="eyebrow">${esc(eyebrow)}</div><h1>${esc(title)}</h1><p class="sub">${esc(sub)}</p></div><div class="page-tools">${buttons}</div></div>`}
 async function loadPage(page=state.page){
@@ -80,7 +80,7 @@ async function loadPage(page=state.page){
  main.innerHTML='<div class="loading"><div class="spinner"></div></div>';
  if(state.user.must_change_password){main.innerHTML=header('FIRST-RUN SETUP','Secure your administrator account','Change the temporary password to continue.');passwordModal(true);return}
  try{
-  const map={dashboard:renderDashboard,security:renderSecurity,users:renderUsers,roles:renderRoles,permissions:renderPermissions,databases:renderDatabases,maintenance:renderMaintenance,service:renderService,settings:renderSettings,audit:renderAudit};
+  const map={dashboard:renderDashboard,security:renderSecurity,users:renderUsers,roles:renderRoles,permissions:renderPermissions,databases:renderDatabases,maintenance:renderMaintenance,service:renderService,mcp:renderMcp,settings:renderSettings,audit:renderAudit};
   main.innerHTML=await map[page]();
  }catch(e){main.innerHTML=`${header('SERVER ADMINISTRATION','Unable to load this page',e.message)}<div class="notice red">${ic('warning')}${esc(e.message)}</div>`}
 }
@@ -110,6 +110,23 @@ async function renderService(){
  <button class="btn btn-primary" type="submit" ${can('manage_settings')?'':'disabled'}>${ic('save')} Save port</button></form>
  <div class="notice amber section-space">${ic('warning')} After changing the port, double-click <strong>Stop AI App Server.bat</strong>, then <strong>Open AI App Server.bat</strong> to restart. The SQLite database is never replaced.</div></section></div>`;
 }
+
+async function renderMcp(){
+ if(!can('view_service'))throw new Error('Server view permission required.');
+ const d=await api('/mcp');
+ return header('OPTIONAL MCP MODULE','MCP Tools & Connections','Connect this application to compatible MCP clients. Disabled by default.')+
+ `<div class="grid cols-2"><section class="panel">${panelHead('MCP endpoint','Available only to clients with your private token','shield')}
+ <div class="server-row"><span>Status</span>${badge(d.enabled?'Enabled':'Disabled',d.enabled?'green':'gray')}</div>
+ <div class="server-row"><span>Endpoint</span><code>/mcp</code></div>
+ <div class="server-row"><span>Protocol</span><strong>${esc(d.protocol)}</strong></div>
+ <p class="sub">Your tools belong only to this application. Other AI App Server installations remain separate.</p>
+ <div class="row-actions section-space">${can('manage_settings')?`<button class="btn btn-primary" data-action="mcp-enable">${ic('lock')} ${d.enabled?'Rotate access token':'Enable MCP and create token'}</button> ${d.enabled?`<button class="btn btn-outline" data-action="mcp-disable">Disable MCP</button>`:''}`:'Contact an administrator to change settings.'}</div>
+ <div id="mcp-token-panel" class="section-space"></div>
+ </section><section class="panel">${panelHead('Registered tools','Added explicitly in your project: app/mcp_tools.py','list')}
+ ${d.tool_load_error?`<div class="notice amber">Tool file could not load. Check app/mcp_tools.py, then restart this application.</div>`:""}${d.tools.length?d.tools.map(t=>`<div class="server-row"><span><strong>${esc(t.name)}</strong><br><small>${esc(t.description)}</small></span>${badge('Read-only','green')}</div>`).join(''):empty('No tools registered','Add app/mcp_tools.py to expose tools written by your developer.')}
+ <div class="notice amber section-space">${ic('warning')} Do not expose secrets, shell commands or unrestricted database access. Only trusted, read-only tools are available in this release.</div></section></div>`;
+}
+
 async function renderSecurity(){
  const d=await api('/security');
  const pre=await api('/production-check');
@@ -201,6 +218,18 @@ async function act(el){const action=el.dataset.action,id=Number(el.dataset.id);t
  case 'new-db':newDatabaseModal();break;
  case 'test-db':{const r=await api(`/databases/${id}/test`,{method:'POST'});toast(r.message);break;}
  case 'delete-db':if(confirm(`Remove the connection "${el.dataset.name}"? This does not delete the actual database.`)){await api(`/databases/${id}`,{method:'DELETE'});toast('Connection removed');await loadPage()}break;
+ case 'mcp-enable':{
+   if(!confirm('Enable MCP and generate a new access token? Any previous token will stop working.'))break;
+   const r=await api('/mcp/enable',{method:'POST'});
+   await loadPage();
+   const panel=document.getElementById('mcp-token-panel');
+   if(panel){panel.innerHTML='<div class="notice amber">Copy this token now. It will not be shown again.</div><pre id="mcp-token-value" style="overflow-wrap:anywhere;white-space:pre-wrap"></pre><button class="btn btn-outline btn-small" data-action="mcp-copy">Copy token</button>';
+      document.getElementById('mcp-token-value').textContent=r.token;}
+   toast('MCP enabled — save the new access token securely');break;}
+ case 'mcp-disable':if(confirm('Disable MCP and revoke its access token?')){await api('/mcp/disable',{method:'POST'});await loadPage();toast('MCP disabled');}break;
+ case 'mcp-copy':{
+    const value=document.getElementById('mcp-token-value')?.textContent;
+    if(value){await navigator.clipboard.writeText(value);toast('Token copied. Store it safely.');}break;}
  case 'preview-maintenance':previewMaintenance();break;
  default:break;
  }

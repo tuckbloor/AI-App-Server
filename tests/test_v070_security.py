@@ -149,9 +149,9 @@ def test_updater_restores_pre_migration_database_on_failed_restart(tmp_path, mon
     spec.loader.exec_module(updater)
     incoming = tmp_path / 'new-engine'
     shutil.copytree(root / 'engine', incoming)
-    (incoming / 'ai_app_server' / 'version.py').write_text('__version__ = "0.8.1"\n')
+    (incoming / 'ai_app_server' / 'version.py').write_text('__version__ = "0.9.2"\n')
     def fake_command(*args, **kwargs):
-        if any('desktop_launcher' in str(a) for a in args) and 'start' in args and updater.version(root / 'engine') == (0, 8, 1):
+        if any('desktop_launcher' in str(a) for a in args) and 'start' in args and updater.version(root / 'engine') == (0, 9, 2):
             with sqlite3.connect(datadir / 'server.sqlite3') as conn:
                 conn.execute('PRAGMA user_version=99')
                 conn.execute('CREATE TABLE bad_migration(test TEXT)')
@@ -159,7 +159,7 @@ def test_updater_restores_pre_migration_database_on_failed_restart(tmp_path, mon
     monkeypatch.setattr(updater, '_command', fake_command)
     with pytest.raises(RuntimeError, match='pre-upgrade SQLite snapshot reinstated'):
         updater.update(root, incoming)
-    assert updater.version(root / 'engine') == (0, 8, 0)
+    assert updater.version(root / 'engine') == (0, 9, 1)
     restored = Store(datadir)
     with restored.db() as conn:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION

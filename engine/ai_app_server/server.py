@@ -85,6 +85,8 @@ def create_app(script: Path, *, data_dir: Path | None = None,
             response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none'"
         return response
 
+    from .mcp_module import router_for
+    app.include_router(router_for(app))
     app.include_router(admin_router())
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
