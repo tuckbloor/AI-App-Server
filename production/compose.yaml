@@ -1,0 +1,48 @@
+# Each project runs independently with its own data and admin account.
+# Put this file inside this project's production/ folder and set production/.env.
+services:
+  ai-app:
+    build:
+      context: ..
+      dockerfile: production/Dockerfile
+    image: ai-app-server-local:0.8.0
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=64m
+    environment:
+      AI_APP_SERVER_BEHIND_TLS_PROXY: '1'
+      AI_APP_SERVER_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN in production/.env}
+      AI_APP_SERVER_APP_PASSWORD: ${AI_APP_SERVER_APP_PASSWORD:?Set AI_APP_SERVER_APP_PASSWORD in production/.env}
+    volumes:
+      - ../app:/workspace/app:ro
+      - aiapp_data:/workspace/data
+      - aiapp_config:/workspace/config
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+  caddy:
+    image: caddy:2.10.2
+    # Caddy shares the same network namespace: Python listens on loopback only.
+    network_mode: service:ai-app
+    depends_on: [ai-app]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in production/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+volumes:
+  aiapp_data:
+  aiapp_config:
+  caddy_data:
+  caddy_config:

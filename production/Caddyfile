@@ -1,0 +1,12 @@
+{$APP_DOMAIN} {
+    encode zstd gzip
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+    reverse_proxy 127.0.0.1:8501 {
+        # Overwrite the protocol marker; the backend rejects insecure requests.
+        header_up X-Forwarded-Proto https
+    }
+}
