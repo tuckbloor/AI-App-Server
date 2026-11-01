@@ -34,3 +34,4 @@ app/
 *.p12
 *.pfx
 .secret-key
+.idea/
