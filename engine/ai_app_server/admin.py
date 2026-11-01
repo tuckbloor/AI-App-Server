@@ -18,6 +18,7 @@ from .mail import configured as smtp_configured, send_mail
 from .service import service_status
 from .hosting import read_hosting, save_hosting, is_port_free, validate_port, validate_mode
 from .storage import SCHEMA_VERSION
+from .version import __version__
 from .app_security import production_checks, validate_production, request_ip
 
 
@@ -160,7 +161,7 @@ def admin_router():
         user = require(request, allow_initial=True)
         store = request.app.state.store
         return {"user":store.public_user(user), "csrf":user["csrf"],
-                "permissions":store.permissions(user), "app_title":store.settings().get("app_title", "AI App Server")}
+                "permissions":store.permissions(user), "app_title":store.settings().get("app_title", "AI App Server"), "version": __version__}
 
     def link_base(request: Request):
         # For internet deployment the operator must supply an explicitly trusted origin.
@@ -274,7 +275,7 @@ def admin_router():
         return {"app_title":store.settings()["app_title"], "users":count_users,"roles":count_roles,
                 "databases":count_databases,"maintenance":store.maintenance_on(),"recent":recent,
                 "server":{"python":platform.python_version(),"os":platform.system(),"mode":request.app.state.mode,
-                          "script":request.app.state.script.name,"storage":str(store.path),"schema_version":SCHEMA_VERSION,"version":"0.8.0"}}
+                          "script":request.app.state.script.name,"storage":str(store.path),"schema_version":SCHEMA_VERSION,"version":__version__}}
 
     @router.get("/service")
     def service(request: Request):

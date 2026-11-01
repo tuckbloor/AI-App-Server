@@ -5,9 +5,21 @@ services:
     build:
       context: ..
       dockerfile: production/Dockerfile
-    image: ai-app-server-local:0.9.0
+    image: ai-app-server-local:1.0.2
     init: true
     restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/health', timeout=4).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 35s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -21,14 +33,36 @@ services:
       AI_APP_SERVER_BEHIND_TLS_PROXY: '1'
       AI_APP_SERVER_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN in production/.env}
       AI_APP_SERVER_APP_PASSWORD: ${AI_APP_SERVER_APP_PASSWORD:?Set AI_APP_SERVER_APP_PASSWORD in production/.env}
+      AI_APP_SERVER_MCP_TOOLS_APPROVED: ${AI_APP_SERVER_MCP_TOOLS_APPROVED:-0}
+      AI_APP_SERVER_MCP_TOOLS_SHA256: ${AI_APP_SERVER_MCP_TOOLS_SHA256:-}
     volumes:
       - ../app:/workspace/app:ro
       - aiapp_data:/workspace/data
       - aiapp_config:/workspace/config
+      - aiapp_backups:/workspace/backups
     ports:
       - '80:80'
       - '443:443'
       - '443:443/udp'
+  # Daily verified application/database snapshots in a separate Docker volume.
+  # Copy these snapshots OFF THE HOST for true disaster recovery.
+  backup:
+    image: ai-app-server-local:1.0.2
+    command: ["python", "/workspace/production/backup_worker.py"]
+    depends_on: [ai-app]
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      AI_APP_SERVER_BACKUP_INTERVAL: "86400"
+      AI_APP_SERVER_BACKUP_RETENTION: "7"
+    volumes:
+      - ../app:/workspace/app:ro
+      - aiapp_data:/workspace/data
+      - aiapp_config:/workspace/config
+      - aiapp_backups:/workspace/backups
   caddy:
     image: caddy:2.10.2
     # Caddy shares the same network namespace: Python listens on loopback only.
@@ -46,3 +80,4 @@ volumes:
   aiapp_config:
   caddy_data:
   caddy_config:
+  aiapp_backups:

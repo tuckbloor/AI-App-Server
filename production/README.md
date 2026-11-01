@@ -1,46 +1,22 @@
-# Production deployment reference — AI App Server v0.9.0
+# Production deployment — AI App Server 1.0.2
 
-This is a **production hardening candidate**, not a blanket approval to expose the
-project to the internet. Start from a trusted, dedicated Linux host with Docker
-Compose v2, a DNS hostname, reachable ports 80/443, and reviewed application code.
+This is the **production deployment template for trusted, self-hosted Python
+applications**, not an unrestricted code-execution hosting service. It requires
+real DNS, TLS, administrator setup and operational acceptance tests. Do not use
+the Windows one-click development launcher as a production service.
 
-The Windows double-click installer is for LOCAL development; no SSL needed there.
-The overlay installer deliberately refuses to modify a production-configured
-instance. For Linux production, build and test the updated image, verify a cloned
-persistent volume, schedule a maintenance window, and deploy via your normal
-Docker release process with a rollback image and offline backup.
+1. Set your own `production/.env` from `.env.example`, using real DNS and a long,
+   distinct application password. Keep `.env` outside Git.
+2. Start a Linux Docker Compose staging stack, set the first admin with
+   `python -m ai_app_server.cli setup-admin /workspace/app/app.py --data-dir /workspace/data`
+   through `docker compose run --rm --no-deps ai-app ...` and run `doctor`.
+3. Deploy Caddy TLS proxy with `docker compose --env-file production/.env -f production/compose.yaml up -d`.
+4. Run `python production/verify-deployment.py https://your-host` externally.
+   Run `python production/production_acceptance.py` with the same production
+   environment variables to check deployment configuration.
+5. Test application login, administrator permissions, WebSockets, MCP token
+   denial and approval, maintenance, restart recovery and off-host restore.
 
-## Initial deployment
-
-1. Keep your own Python `app/app.py` outside the framework engine.
-2. Copy `production/.env.example` to `production/.env`. Set `APP_DOMAIN`,
-   `PUBLIC_ORIGIN` (exact `https://...`), and unique 16+ character
-   `AI_APP_SERVER_APP_PASSWORD`. Restrict `.env` permissions (`chmod 600`).
-3. Run `docker compose --env-file production/.env -f production/compose.yaml build`.
-4. Before exposing the service, create the first administrator through the CLI:
-
-   `docker compose --env-file production/.env -f production/compose.yaml run --rm --no-deps ai-app python -m ai_app_server.cli setup-admin /workspace/app/app.py --data-dir /workspace/data`
-
-5. Check all production requirements:
-
-   `docker compose --env-file production/.env -f production/compose.yaml run --rm --no-deps ai-app python -m ai_app_server.cli doctor /workspace/app/app.py --data-dir /workspace/data`
-
-6. Bring it online: `docker compose --env-file production/.env -f production/compose.yaml up -d`.
-7. Test HTTPS, administrator login, application gate login, WebSockets, maintenance
-   mode, restart recovery, and backup/restore in the target environment.
-
-## Security boundaries
-
-- Caddy terminates TLS. The Python HTTP port is local to the shared network namespace;
-  it is not published directly to clients.
-- Run applications with an unprivileged user and read-only code volume. Set resource
-  limits and protect data and secrets. Containers limit some damage, but **do not**
-  make untrusted Python code safe.
-- Current application access uses a single shared password; it is not staff-level
-  authentication or authorization. Admin login remains separate.
-- Never expose local Ollama directly to the internet. Restrict agent file, network
-  and external-tool access to only what the project needs.
-- Make off-server encrypted backups of the database, config, keys and application
-  data; test restoration. The overlay's local snapshot is not disaster recovery.
-
-For background and limitations read `PRODUCTION-SECURITY.md`.
+Read **ACCEPTANCE.md** for the required acceptance checklist and limitations.
+Production updates use staged, versioned container images. The Windows overlay
+updater refuses to modify production-configured installations.

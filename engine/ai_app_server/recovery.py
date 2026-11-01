@@ -9,12 +9,16 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
 import tempfile
 
 SNAPSHOT_VERSION = 1
+MAX_PROJECT_FILES = 1000
+MAX_PROJECT_BYTES = 100 * 1024 * 1024
+MAX_SINGLE_FILE = 20 * 1024 * 1024
+IGNORE_DIRECTORIES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules"}
 FILES = (
     ('data/server.sqlite3', 'data/server.sqlite3'),
     ('data/.secret-key', 'data/.secret-key'),
@@ -39,7 +43,7 @@ def _check_db(path: Path) -> None:
             raise RuntimeError('SQLite integrity check failed')
 
 
-def create_snapshot(root: Path, snapshot: Path) -> dict:
+def create_snapshot(root: Path, snapshot: Path, *, include_app: bool = False) -> dict:
     """Snapshot SQLite, key and server settings, without changing live installation."""
     root, snapshot = Path(root).resolve(), Path(snapshot).resolve()
     if snapshot == root / 'data' or (root / 'data') in snapshot.parents:
@@ -70,6 +74,35 @@ def create_snapshot(root: Path, snapshot: Path) -> dict:
             if os.name != 'nt':
                 destination.chmod(0o600)
             manifest['files'][relative] = _digest(destination)
+        if include_app:
+            # Full application source for off-host disaster recovery. Never follow links.
+            app_dir = root / 'app'
+            count = 0
+            total = 0
+            if app_dir.is_symlink():
+                raise RuntimeError('Application directory cannot be a symlink')
+            if app_dir.is_dir():
+                for parent, dirs, names in os.walk(app_dir, followlinks=False):
+                    dirs[:] = [d for d in dirs if d not in IGNORE_DIRECTORIES]
+                    for d in dirs:
+                        if (Path(parent) / d).is_symlink():
+                            raise RuntimeError('Cannot back up linked application folders')
+                    for name in names:
+                        src = Path(parent) / name
+                        if src.is_symlink() or not src.is_file():
+                            raise RuntimeError('Cannot back up linked or special application files')
+                        count += 1
+                        size = src.stat().st_size
+                        total += size
+                        if count > MAX_PROJECT_FILES or size > MAX_SINGLE_FILE or total > MAX_PROJECT_BYTES:
+                            raise RuntimeError('Application backup exceeds safety limits; use a dedicated off-host project backup')
+                        relative = src.relative_to(root).as_posix()
+                        dst = snapshot / relative
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, dst)
+                        if os.name != 'nt':
+                            dst.chmod(0o600)
+                        manifest['files'][relative] = _digest(dst)
         (snapshot / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
         verify_snapshot(snapshot)
     except Exception:
@@ -84,11 +117,17 @@ def verify_snapshot(snapshot: Path) -> dict:
     if manifest.get('format') != SNAPSHOT_VERSION or not isinstance(manifest.get('files'), dict):
         raise ValueError('Unsupported snapshot format')
     allowed = {source for source, _ in FILES}
-    if not set(manifest['files']).issubset(allowed):
-        raise ValueError('Snapshot contains unexpected file paths')
+    if len(manifest['files']) > MAX_PROJECT_FILES + len(FILES):
+        raise ValueError('Snapshot contains too many files')
     for relative, sha in manifest['files'].items():
+        relpath = PurePosixPath(relative)
+        if (not isinstance(relative, str) or relpath.is_absolute() or '..' in relpath.parts or
+                str(relpath) != relative or
+                not (relative in allowed or (relative.startswith('app/') and len(relpath.parts) > 1))):
+            raise ValueError('Snapshot contains unexpected file paths')
         path = snapshot / relative
-        if path.is_symlink() or not path.is_file() or not isinstance(sha, str) or _digest(path) != sha:
+        if (not path.resolve().is_relative_to(snapshot) or path.is_symlink()
+                or not path.is_file() or not isinstance(sha, str) or _digest(path) != sha):
             raise RuntimeError(f'Backup integrity failure: {relative}')
     if 'data/server.sqlite3' in manifest['files']:
         if 'data/.secret-key' not in manifest['files']:
@@ -107,6 +146,8 @@ def restore_snapshot(root: Path, snapshot: Path) -> None:
     manifest = verify_snapshot(snapshot)
     for relative in manifest['files']:
         dest = root / relative
+        if not dest.resolve().is_relative_to(root):
+            raise RuntimeError('Restoration path escapes installation')
         dest.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=dest.parent, prefix='.restore-', delete=False) as out:
             tmp = Path(out.name)
@@ -122,3 +163,19 @@ def restore_snapshot(root: Path, snapshot: Path) -> None:
         for suffix in ('-wal', '-shm'):
             (root / 'data' / ('server.sqlite3' + suffix)).unlink(missing_ok=True)
         _check_db(root / 'data/server.sqlite3')
+
+
+def rehearse_restore(snapshot: Path, destination: Path) -> dict:
+    """Actually restore into a NEW isolated directory, never touch the live server."""
+    destination = Path(destination).resolve()
+    if destination.exists():
+        raise FileExistsError('Restore rehearsal destination must not exist')
+    if destination == Path(snapshot).resolve() or destination in Path(snapshot).resolve().parents:
+        raise ValueError('Invalid restore destination')
+    destination.mkdir(parents=True, exist_ok=False)
+    try:
+        restore_snapshot(destination, snapshot)
+        return verify_snapshot(snapshot)
+    except Exception:
+        shutil.rmtree(destination)
+        raise

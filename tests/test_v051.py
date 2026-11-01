@@ -42,16 +42,16 @@ def test_existing_app_opened_without_starting_duplicate(tmp_path, monkeypatch):
     assert db.read_bytes() == b'EXISTING ADMIN DATABASE'
 
 
-def test_conflicting_port_auto_selects_new_one_without_touching_db(tmp_path, monkeypatch):
+def test_existing_port_conflict_fails_closed_without_touching_db(tmp_path, monkeypatch):
     root, script, data=project(tmp_path)
     save_hosting(data, 8501)
     db=data/'server.sqlite3'
     db.write_bytes(b'EXISTING DATABASE')
     monkeypatch.setattr('ai_app_server.desktop_launcher.instance_responding', lambda script,port:False)
     monkeypatch.setattr('ai_app_server.desktop_launcher.is_port_free',lambda port:port == 8502)
-    port, active=pick_port(script,data)
-    assert (port,active)==(8502,False)
-    assert read_hosting(data)['port'] == 8502
+    with pytest.raises(RuntimeError, match="Configured port 8501 is busy"):
+        pick_port(script,data)
+    assert read_hosting(data)['port'] == 8501
     assert db.read_bytes() == b'EXISTING DATABASE'
 
 

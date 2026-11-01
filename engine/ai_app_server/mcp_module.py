@@ -19,13 +19,16 @@ import os
 from pathlib import Path
 import re
 import secrets
+import types
 import tempfile
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from .version import __version__
 
 PROTOCOL = "2026-07-28"
+SUPPORTED_PROTOCOLS = (PROTOCOL, "2025-11-25")
 MAX_REQUEST = 64 * 1024
 MAX_RESULT = 16 * 1024
 TOOL_NAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$")
@@ -157,18 +160,39 @@ class Registry:
         return str(result)[:MAX_RESULT]
 
 
+def tool_source(script: Path) -> Path | None:
+    """Only the current project's explicitly named MCP tool module is considered."""
+    script = Path(script).resolve()
+    candidates = [script.parent / "mcp_tools.py", script.parent.parent / "app" / "mcp_tools.py"]
+    file = next((p for p in candidates if p.is_file()), None)
+    if file and file.is_symlink():
+        raise RuntimeError("Symlinked MCP tool modules are forbidden")
+    return file
+
+
+def approved_tool_source(script: Path, *, production: bool) -> bool:
+    """Check deployment approval against the actual, current Python tool bytes."""
+    file = tool_source(script)
+    if not file:
+        return True  # No tools can be called.
+    if not production:
+        return True
+    expected = os.environ.get("AI_APP_SERVER_MCP_TOOLS_SHA256", "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", expected):
+        return False
+    return hmac.compare_digest(hashlib.sha256(file.read_bytes()).hexdigest(), expected)
+
+
 def load_tools(script: Path) -> Registry:
     registry = Registry()
-    script = Path(script).resolve()
-    # Separate application root (not package engine); never load unknown paths from HTTP.
-    candidates = [script.parent / "mcp_tools.py", script.parent.parent / "app" / "mcp_tools.py"]
-    chosen = next((p for p in candidates if p.is_file()), None)
+    chosen = tool_source(script)
     if chosen:
-        spec = importlib.util.spec_from_file_location("aia_project_mcp_tools", chosen)
-        if not spec or not spec.loader:
-            raise RuntimeError("Unable to load MCP tools")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Execute precisely the bytes that were read from the trusted source file.
+        # This is NOT a sandbox: application authors must review the tool code.
+        source = chosen.read_bytes()
+        module = types.ModuleType("aia_project_mcp_tools")
+        module.__file__ = str(chosen)
+        exec(compile(source, str(chosen), "exec"), module.__dict__)
         if not callable(getattr(module, "register_tools", None)):
             raise RuntimeError("mcp_tools.py must export register_tools(registry)")
         module.register_tools(registry)
@@ -176,7 +200,7 @@ def load_tools(script: Path) -> Registry:
 
 
 def rpc_result(request_id, result: dict) -> dict:
-    return {"jsonrpc": "2.0", "id": request_id, "result": {"resultType": "complete", **result}}
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
 def rpc_error(request_id, code: int, message: str) -> dict:
@@ -185,19 +209,38 @@ def rpc_error(request_id, code: int, message: str) -> dict:
 
 def router_for(app) -> APIRouter:
     router = APIRouter()
-    # A developer tool error must not take down the whole web server.
-    try:
-        app.state.mcp_registry = load_tools(app.state.script)
-        app.state.mcp_load_error = False
-    except Exception:
-        app.state.mcp_registry = Registry()
-        app.state.mcp_load_error = True
+    # MCP is off by default. NEVER execute application mcp_tools.py at startup
+    # while MCP is disabled; only load after an authenticated tool request.
+    app.state.mcp_registry = Registry()
+    app.state.mcp_load_error = False
+    app.state.mcp_loaded = False
     app.state.mcp_semaphore = asyncio.Semaphore(4)
+    app.state.mcp_limits = {}
+
+    def rate_allowed(token: str) -> bool:
+        # Per-process supplementary limit; production edge proxy must also rate-limit.
+        now = time.monotonic()
+        key = hashlib.sha256(token.encode()).hexdigest()
+        limits = app.state.mcp_limits
+        if len(limits) > 1024:
+            for old in [k for k, (start, _) in limits.items() if now - start >= 60]:
+                limits.pop(old, None)
+            if len(limits) > 1024 and key not in limits:
+                return False
+        start, count = limits.get(key, (now, 0))
+        if now - start >= 60:
+            start, count = now, 0
+        if count >= 60:
+            return False
+        limits[key] = (start, count + 1)
+        return True
 
     @router.post("/mcp", include_in_schema=False)
     async def mcp_endpoint(request: Request):
         if not authentic(app.state.store.directory, request.headers.get("authorization", "")):
             return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
+        if not rate_allowed(request.headers.get("authorization", "")):
+            return Response(status_code=429, headers={"Retry-After": "60"})
         # Browsers cannot use MCP cross-origin. Origin-free native clients must use a token.
         origin = request.headers.get("origin")
         if origin:
@@ -205,16 +248,24 @@ def router_for(app) -> APIRouter:
                         str(request.base_url).rstrip("/"))
             if origin.rstrip("/") != expected.rstrip("/"):
                 return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
-        length = request.headers.get("content-length", "0")
-        if not length.isascii() or not length.isdecimal():
+        length = request.headers.get("content-length")
+        if length is not None and (not length.isascii() or not length.isdecimal()):
             return Response(status_code=400)
-        if int(length) > MAX_REQUEST:
+        if length is not None and int(length) > MAX_REQUEST:
             return Response(status_code=413)
         if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
             return Response(status_code=415)
-        content = await request.body()
-        if len(content) > MAX_REQUEST:
-            return Response(status_code=413)
+        if app.state.production:
+            accepted = request.headers.get("accept", "")
+            if "application/json" not in accepted or "text/event-stream" not in accepted:
+                return Response(status_code=406)
+        # Bounded streaming also covers Transfer-Encoding: chunked; request.body()
+        # would buffer arbitrarily large unauthenticated payloads in memory.
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_REQUEST:
+                return Response(status_code=413)
         try:
             message = json.loads(content)
         except (ValueError, UnicodeDecodeError):
@@ -232,11 +283,47 @@ def router_for(app) -> APIRouter:
         if not isinstance(params, dict):
             return JSONResponse(rpc_error(ident, -32602, "Invalid params"))
         meta = params.get("_meta", {})
-        version = request.headers.get("mcp-protocol-version") or (meta.get("io.modelcontextprotocol/protocolVersion") if isinstance(meta, dict) else None)
-        if version and version != PROTOCOL:
-            return JSONResponse(rpc_error(ident, -32602, "Unsupported MCP protocol version. Supported: " + PROTOCOL), status_code=400)
+        version_header = request.headers.get("mcp-protocol-version")
+        version_meta = meta.get("io.modelcontextprotocol/protocolVersion") if isinstance(meta, dict) else None
+        if app.state.production and method != "initialize" and version_header is None:
+            return JSONResponse(rpc_error(ident, -32602, "MCP protocol version header required"), status_code=400)
+        if version_header is not None and version_meta is not None and version_header != version_meta:
+            return JSONResponse(rpc_error(ident, -32602, "MCP protocol header mismatch"), status_code=400)
+        version = version_header or version_meta
+        if method == "initialize":
+            requested = params.get("protocolVersion")
+            if not isinstance(requested, str) or not requested:
+                return JSONResponse(rpc_error(ident, -32602, "protocolVersion required"), status_code=400)
+            if requested not in SUPPORTED_PROTOCOLS:
+                requested = PROTOCOL  # MCP version negotiation
+            return JSONResponse(rpc_result(ident, {
+                "protocolVersion": requested,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "AI App Server MCP", "version": __version__}
+            }))
+        if version and version not in SUPPORTED_PROTOCOLS:
+            return JSONResponse(rpc_error(ident, -32602, "Unsupported MCP protocol version"), status_code=400)
+        # An existing endpoint token does not confer trust on changed tool source.
+        # Check before every request, not only once at initial import.
+        if app.state.production and not approved_tool_source(app.state.script, production=True):
+            app.state.mcp_registry = Registry()
+            app.state.mcp_loaded = False
+            return JSONResponse(rpc_error(ident, -32000, "MCP tool code changed or was not approved"), status_code=503)
+        # Do not import/execute MCP tools until a valid token and protocol checks
+        # have passed. Project authors must explicitly approve trusted tool code
+        # in production; a readOnlyHint is NOT an OS sandbox.
+        if not app.state.mcp_loaded:
+            if app.state.production and os.environ.get("AI_APP_SERVER_MCP_TOOLS_APPROVED") != "1":
+                return JSONResponse(rpc_error(ident, -32000, "MCP tools have not been approved by the server owner"), status_code=503)
+            try:
+                app.state.mcp_registry = load_tools(app.state.script)
+                app.state.mcp_load_error = False
+            except Exception:
+                app.state.mcp_registry = Registry()
+                app.state.mcp_load_error = True
+            app.state.mcp_loaded = True
         if method == "server/discover":
-            return JSONResponse(rpc_result(ident, {"supportedVersions": [PROTOCOL], "capabilities": {"tools": {}},
+            return JSONResponse(rpc_result(ident, {"supportedVersions": list(SUPPORTED_PROTOCOLS), "capabilities": {"tools": {}},
                 "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "AI App Server MCP", "version": __version__}}}))
         if method == "ping":
             return JSONResponse(rpc_result(ident, {}))
@@ -252,6 +339,10 @@ def router_for(app) -> APIRouter:
                 async with app.state.mcp_semaphore:
                     text = await app.state.mcp_registry.call(name, arguments)
                 response = rpc_result(ident, {"content": [{"type": "text", "text": text}], "isError": False})
+                try:
+                    app.state.store.audit("mcp", "tool_call", name)
+                except Exception:
+                    pass  # Audit failure must not leak application stack traces.
             except ValueError:
                 response = rpc_result(ident, {"content": [{"type": "text", "text": "Invalid tool arguments"}], "isError": True})
             except Exception:

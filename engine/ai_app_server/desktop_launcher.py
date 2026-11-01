@@ -43,13 +43,21 @@ def instance_responding(script: Path, port: int) -> bool:
 
 
 def pick_port(script: Path, data: Path) -> tuple[int, bool]:
+    # Existing installations must never silently change their saved port.
+    # Only a brand-new installation may choose a free port automatically.
+    from .hosting import _existing_config
+    first_run = not _existing_config(data).is_file()
     settings = initialize_port(data)
     port = settings["port"]
     if instance_responding(script, port):
         return port, True
     if is_port_free(port):
         return port, False
-    # If a different application has this port, find another. Never touch SQLite.
+    # An existing configured port is part of this application identity.
+    # Fail instead of unexpectedly moving the server to a different address.
+    if not first_run:
+        raise RuntimeError(f"Configured port {port} is busy. Stop the other application or change this installation's port in Admin > Service.")
+    # Only first-run installations can choose another available port.
     for candidate in range(8501, 8701):
         if is_port_free(candidate):
             save_hosting(data, candidate)
@@ -105,6 +113,14 @@ def launch(project: Path, *, open_browser: bool = True, timeout: int = 35) -> di
         if p.poll() is not None:
             break
         time.sleep(.35)
+    if p.poll() is None:
+        # Avoid leaving a second, broken background server behind after a timeout.
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    (data / "runtime.json").unlink(missing_ok=True)
     tail = output.read_text(encoding="utf-8", errors="replace").splitlines()[-18:]
     raise RuntimeError("The server did not start. See data\\logs\\server.log.\n" + "\n".join(tail))
 

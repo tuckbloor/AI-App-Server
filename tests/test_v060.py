@@ -32,6 +32,8 @@ def make_project(tmp_path):
     root = tmp_path / 'instance'
     root.mkdir()
     shutil.copytree(PROJECT / 'engine', root / 'engine', ignore=shutil.ignore_patterns('__pycache__', '*.egg-info'))
+    # Exercise compatibility with a v1.0.1 installation, not the current source version.
+    (root / 'engine/ai_app_server/version.py').write_text('__version__ = "1.0.1"\n')
     (root / 'starter').mkdir()
     shutil.copy2(PROJECT / 'starter' / 'app.py', root / 'starter' / 'app.py')
     return root
@@ -48,7 +50,7 @@ def seed_db(root):
     return data
 
 
-def prepare_update(root, tmp_path, *, ver='0.9.2'):
+def prepare_update(root, tmp_path, *, ver='1.0.2'):
     updated = tmp_path / 'update'
     shutil.copytree(root / 'engine', updated)
     (updated / 'ai_app_server' / 'version.py').write_text(f'__version__ = "{ver}"\n', encoding='utf8')
@@ -62,7 +64,7 @@ def assert_db_unchanged(data):
 
 
 def test_version_and_modular_source_layout():
-    assert __version__ == '0.9.1'
+    assert __version__ == '1.0.2'
     assert (PROJECT / 'engine' / 'ai_app_server' / 'server.py').is_file()
     assert not (PROJECT / 'ai_app_server').exists()
     assert (PROJECT / 'starter' / 'app.py').is_file()
@@ -122,7 +124,7 @@ def test_zip_staging_extracts_only_engine(tmp_path):
     stage = tmp_path / 'stage'
     stage.mkdir()
     candidate = updater.stage_source(archive, stage)
-    assert updater.check_engine(candidate) == (0, 9, 1)
+    assert updater.check_engine(candidate) == (1, 0, 1)
     assert not (stage / 'data').exists()
 
 
@@ -140,9 +142,9 @@ def test_update_dry_run_preserves_everything(tmp_path):
     data = seed_db(root)
     new = prepare_update(root, tmp_path)
     result = updater.update(root, new, dry_run=True)
-    assert result['current'] == (0, 9, 1)
-    assert result['new'] == (0, 9, 2)
-    assert updater.version(root / 'engine') == (0, 9, 1)
+    assert result['current'] == (1, 0, 1)
+    assert result['new'] == (1, 0, 2)
+    assert updater.version(root / 'engine') == (1, 0, 1)
     assert not (root / 'backups').exists()
     assert_db_unchanged(data)
 
@@ -157,7 +159,7 @@ def test_successful_code_update_never_replaces_app_or_data(tmp_path, monkeypatch
     calls = []
     monkeypatch.setattr(updater, '_command', lambda *args, **kw: calls.append(args))
     result = updater.update(root, update)
-    assert updater.version(root / 'engine') == (0, 9, 2)
+    assert updater.version(root / 'engine') == (1, 0, 2)
     assert (root / 'app' / 'app.py').read_text() == 'print("MY CUSTOM APP")'
     assert_db_unchanged(data)
     assert read_hosting(data)['port'] == 8566
@@ -173,12 +175,12 @@ def test_failed_install_restores_previous_engine_and_keeps_data(tmp_path, monkey
     data = seed_db(root)
     new = prepare_update(root, tmp_path)
     def fail_install(*parts, **kwargs):
-        if 'pip' in parts and updater.version(root / 'engine') == (0, 9, 2):
+        if 'pip' in parts and updater.version(root / 'engine') == (1, 0, 2):
             raise RuntimeError('simulation: offline install failed')
     monkeypatch.setattr(updater, '_command', fail_install)
     with pytest.raises(RuntimeError, match='Previous engine restored'):
         updater.update(root, new)
-    assert updater.version(root / 'engine') == (0, 9, 1)
+    assert updater.version(root / 'engine') == (1, 0, 1)
     assert_db_unchanged(data)
     assert list((root / 'backups').glob('engine-update-*/failed-engine'))
 
@@ -189,5 +191,5 @@ def test_downgrade_refused_before_backup_or_writes(tmp_path):
     new = prepare_update(root, tmp_path, ver='0.5.9')
     with pytest.raises(ValueError, match='newer'):
         updater.update(root, new)
-    assert updater.version(root / 'engine') == (0, 9, 1)
+    assert updater.version(root / 'engine') == (1, 0, 1)
     assert_db_unchanged(data)

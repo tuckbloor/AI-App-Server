@@ -1,4 +1,4 @@
-"""Local-only UI service. Do not expose untrusted Python execution to the internet."""
+"""Python app server. Production supports only trusted application source code."""
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -73,16 +73,16 @@ def create_app(script: Path, *, data_dir: Path | None = None,
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = "no-store, private"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if app.state.production:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         if request.url.path == "/app-login":
             response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         elif request.url.path.startswith("/admin") or request.url.path.startswith("/static/admin"):
             response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         else:
-            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none'"
+            response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
         return response
 
     from .mcp_module import router_for

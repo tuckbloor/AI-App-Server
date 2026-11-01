@@ -53,6 +53,17 @@ def main(argv=None):
     backup.add_argument("--to", type=Path, required=True)
     backup.add_argument("--data-dir", type=Path, default=None)
 
+    snapshot = sub.add_parser("snapshot", help="Create a verified backup of SQLite, key, config and project code to another location")
+    snapshot.add_argument("script", type=Path)
+    snapshot.add_argument("--to", type=Path, required=True)
+    snapshot.add_argument("--data-dir", type=Path, default=None)
+
+    restore_test = sub.add_parser("restore-test", help="Prove a snapshot can restore to a fresh isolated folder")
+    restore_test.add_argument("script", type=Path)
+    restore_test.add_argument("--snapshot", type=Path, required=True)
+    restore_test.add_argument("--to", type=Path, required=True)
+    restore_test.add_argument("--data-dir", type=Path, default=None)
+
     verify = sub.add_parser("verify-backup", help="Verify an automatic upgrade snapshot without changing the server")
     verify.add_argument("script", type=Path)
     verify.add_argument("--snapshot", type=Path, required=True)
@@ -62,6 +73,19 @@ def main(argv=None):
     if not args.script.is_file():
         parser.error(f"Application not found: {args.script}")
     data_dir = project_data_dir(args.script, args.data_dir)
+    if args.command in ("snapshot", "restore-test"):
+        from .recovery import create_snapshot, rehearse_restore
+        # Installed layout: app/app.py, data/, config/ are siblings.
+        root = data_dir.parent
+        if not (root / "app").is_dir() or not args.script.resolve().is_relative_to(root / "app"):
+            parser.error("Snapshot requires a modular installation with app/ and data/ siblings")
+        if args.command == "snapshot":
+            result = create_snapshot(root, args.to, include_app=True)
+            print(f"Verified snapshot saved: {args.to} ({len(result['files'])} files)")
+        else:
+            result = rehearse_restore(args.snapshot, args.to)
+            print(f"Restore rehearsal succeeded: {args.to} ({len(result['files'])} files)")
+        return 0
     if args.command == "verify-backup":
         from .recovery import verify_snapshot
         result = verify_snapshot(args.snapshot)
