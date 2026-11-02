@@ -5,16 +5,11 @@ configured only on the host (never shipped in the ZIP). A separate identity prov
 or fine-grained application roles remain the developer's responsibility.
 """
 from __future__ import annotations
-import hmac
 import ipaddress
 import os
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-
-
-def production_password() -> str:
-    return os.environ.get('AI_APP_SERVER_APP_PASSWORD', '')
 
 
 def configured_origin() -> str:
@@ -32,20 +27,17 @@ def production_checks(store, *, local_only: bool) -> list[dict]:
     valid_origin = (parsed.scheme == 'https' and bool(parsed.hostname) and not parsed.path
                     and not parsed.username and not parsed.password and not parsed.query
                     and not parsed.fragment and parsed.netloc == host_port)
-    password = production_password()
     with store.db() as db:
-        users = db.execute('SELECT username,password_hash,must_change_password,is_active FROM users').fetchall()
+        users = db.execute('SELECT password_hash,must_change_password,is_active FROM users').fetchall()
     from .storage import verify_password
     active = [u for u in users if u['is_active']]
-    password_ok = 16 <= len(password) <= 256 and password.lower() not in (
-        'password', 'changeme123456789', 'adminadminadminadmin') and not any(
-            marker in password.lower() for marker in ('replace-with', 'change-me', 'example-password'))
     return [
         {'id':'tls_proxy', 'ok': os.environ.get('AI_APP_SERVER_BEHIND_TLS_PROXY') == '1',
          'message':'Configure TLS reverse proxy (AI_APP_SERVER_BEHIND_TLS_PROXY=1)'},
         {'id':'origin','ok': valid_origin, 'message':'Set AI_APP_SERVER_PUBLIC_ORIGIN to your real HTTPS origin'},
         {'id':'loopback','ok': local_only, 'message':'Bind Python to 127.0.0.1 behind the reverse proxy'},
-        {'id':'app_password','ok': password_ok, 'message':'Set a unique AI_APP_SERVER_APP_PASSWORD (16–256 characters)'},
+        {'id':'app_users', 'ok': bool(store.list_app_users()) and any(u['is_active'] for u in store.list_app_users()),
+         'message':'Create at least one active application user under Admin > App Users'},
         {'id':'admin','ok': bool(active) and all(not u['must_change_password'] and not verify_password('password', u['password_hash']) for u in active),
          'message':'Change the initial administrator password and have an active admin'},
     ]
@@ -55,10 +47,6 @@ def validate_production(store, *, local_only: bool) -> None:
     failures = [row['message'] for row in production_checks(store, local_only=local_only) if not row['ok']]
     if failures:
         raise ValueError('Production checks failed: ' + '; '.join(failures))
-
-
-def matches_password(candidate: str) -> bool:
-    return hmac.compare_digest(candidate.encode('utf-8'), production_password().encode('utf-8'))
 
 
 def request_ip(request) -> str:

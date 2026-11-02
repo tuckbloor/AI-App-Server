@@ -18,7 +18,7 @@ def secure_env(monkeypatch, store):
     store.update_password(1, 'a genuinely long administrator passphrase', email='admin@example.test')
     monkeypatch.setenv('AI_APP_SERVER_BEHIND_TLS_PROXY', '1')
     monkeypatch.setenv('AI_APP_SERVER_PUBLIC_ORIGIN', ORIGIN)
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD', 'a long and unique production gate password')
+    store.create_app_user('alice', 'Alice Tester', 'a long and unique production gate password')
 
 
 def test_hosting_mode_persists_without_touching_sqlite(tmp_path):
@@ -93,7 +93,7 @@ def test_production_no_internal_errors_in_websocket(monkeypatch, tmp_path):
     bad.write_text('raise RuntimeError("SECRET_INTERNAL_PATH")\n', encoding='utf-8')
     app = create_app(bad, data_dir=store.directory, mode='production')
     with TestClient(app, base_url=ORIGIN) as c:
-        login = c.post('/api/app/login', json={'password':'a long and unique production gate password'},
+        login = c.post('/api/app/login', json={'username':'alice','password':'a long and unique production gate password'},
                        headers={'origin':ORIGIN})
         assert login.status_code == 200
         with c.websocket_connect('/ws', headers={'origin':ORIGIN, 'host':'ai.example.test',

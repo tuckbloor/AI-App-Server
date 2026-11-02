@@ -3,8 +3,8 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from .storage import Store
-from .app_security import validate_production, configured_origin, matches_password, request_ip
+from .storage import Store, verify_password
+from .app_security import validate_production, configured_origin, request_ip
 from .admin import admin_router
 import os
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -106,18 +106,29 @@ def create_app(script: Path, *, data_dir: Path | None = None,
         if not app.state.production:
             raise HTTPException(404, "App login is not enabled")
         client_ip = request_ip(request)
-        identity = f"application:{client_ip}"
-        if app.state.store.login_blocked(identity):
-            raise HTTPException(429, "Too many login attempts; try again later")
         if request.headers.get('content-length', '0').isdigit() and int(request.headers.get('content-length', '0')) > 4096:
             raise HTTPException(413, 'Request too large')
-        payload = await request.json()
-        provided = payload.get("password", "") if isinstance(payload, dict) else ""
-        if not isinstance(provided, str) or len(provided) > 256 or not matches_password(provided):
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(400, 'Invalid JSON payload')
+        username = payload.get('username', '') if isinstance(payload, dict) else ''
+        password = payload.get('password', '') if isinstance(payload, dict) else ''
+        if not isinstance(username, str) or not isinstance(password, str) or len(username) > 60 or len(password) > 256:
+            raise HTTPException(400, 'Invalid login details')
+        identity = f'app:{client_ip}:{username.casefold()}'
+        # Also rate-limit by source IP across usernames to resist account enumeration.
+        source_identity = f'app-ip:{client_ip}'
+        if app.state.store.login_blocked(identity) or app.state.store.login_blocked(source_identity):
+            raise HTTPException(429, 'Too many login attempts; try again later')
+        user = app.state.store.app_user_by_name(username)
+        if not user or not user['is_active'] or not verify_password(password, user['password_hash']):
             app.state.store.login_failed(identity)
-            raise HTTPException(401, "Invalid application password")
+            app.state.store.login_failed(source_identity)
+            raise HTTPException(401, 'Invalid username or password')
         app.state.store.clear_login_failures(identity)
-        token = app.state.store.create_app_session()
+        app.state.store.clear_login_failures(source_identity)
+        token = app.state.store.create_app_session(user['id'])
         response = JSONResponse({"ok": True})
         response.set_cookie("aia_app_session", token, httponly=True, secure=True,
                             samesite="strict", max_age=8 * 3600, path="/")

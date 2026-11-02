@@ -22,7 +22,7 @@ def prepare(tmp_path, monkeypatch):
     store.update_password(1, 'not-the-default-and-a-long-private-password', email='admin@example.test')
     monkeypatch.setenv('AI_APP_SERVER_BEHIND_TLS_PROXY','1')
     monkeypatch.setenv('AI_APP_SERVER_PUBLIC_ORIGIN',ORIGIN)
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD','a-really-long-unique-app-password-for-testing')
+    store.create_app_user('alice', 'Alice Tester', 'a-really-long-unique-app-password-for-testing')
     return script,data
 
 

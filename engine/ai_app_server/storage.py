@@ -17,7 +17,7 @@ import shutil
 
 from cryptography.fernet import Fernet
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 PERMISSIONS = {
     "view_service": "View this application service status",
@@ -204,6 +204,15 @@ class Store:
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL,
                     action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '');
+                CREATE TABLE IF NOT EXISTS app_users (
+                    id INTEGER PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    display_name TEXT NOT NULL,
+                    email TEXT NOT NULL DEFAULT '',
+                    password_hash TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    last_login TEXT);
                 CREATE TABLE IF NOT EXISTS app_sessions (
                     token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS login_failures (
@@ -215,6 +224,13 @@ class Store:
                     expires_at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS ix_email_tokens_user ON email_tokens(user_id, purpose);
             """)
+            # Bind each application session to an individual account.
+            # Existing shared-password sessions are deliberately invalidated on upgrade.
+            app_session_cols = {r['name'] for r in db.execute('PRAGMA table_info(app_sessions)')}
+            if 'user_id' not in app_session_cols:
+                db.execute('ALTER TABLE app_sessions ADD COLUMN user_id INTEGER')
+                db.execute('DELETE FROM app_sessions')
+            db.execute('CREATE INDEX IF NOT EXISTS ix_app_sessions_user ON app_sessions(user_id)')
             # Upgrade existing v0.2.0 installations in place, preserving admin data.
             cols = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
             if 'email_verified' not in cols:
@@ -278,28 +294,76 @@ class Store:
         with self.db() as db:
             return [r["permission"] for r in db.execute("SELECT permission FROM role_permissions WHERE role_id=?", (user["role_id"],))]
 
-    def create_app_session(self) -> str:
-        """Issue a random browser session for the app, entirely separate from admin roles."""
+    def list_app_users(self):
+        with self.db() as db:
+            return [dict(row) for row in db.execute(
+                'SELECT id,username,display_name,email,is_active,created_at,last_login FROM app_users ORDER BY id')]
+
+    def app_user_by_name(self, username: str):
+        with self.db() as db:
+            return db.execute('SELECT * FROM app_users WHERE username=?', (username,)).fetchone()
+
+    def create_app_user(self, username: str, display_name: str, password: str, email: str='') -> int:
+        if not is_strong_password(password):
+            raise ValueError('Application password must contain 12–256 characters')
+        if email:
+            email = normalized_email(email)
+        with self.db() as db:
+            result = db.execute(
+                'INSERT INTO app_users(username,display_name,email,password_hash,created_at) VALUES(?,?,?,?,?)',
+                (username, display_name, email, password_hash(password), stamp()))
+            return result.lastrowid
+
+    def set_app_user_active(self, uid: int, active: bool) -> bool:
+        with self.db() as db:
+            row = db.execute('SELECT id FROM app_users WHERE id=?', (uid,)).fetchone()
+            if row is None:
+                return False
+            db.execute('UPDATE app_users SET is_active=? WHERE id=?', (int(active), uid))
+            db.execute('DELETE FROM app_sessions WHERE user_id=?', (uid,))
+            return True
+
+    def reset_app_user_password(self, uid: int, password: str) -> bool:
+        if not is_strong_password(password):
+            raise ValueError('Application password must contain 12–256 characters')
+        with self.db() as db:
+            row = db.execute('SELECT id FROM app_users WHERE id=?', (uid,)).fetchone()
+            if row is None:
+                return False
+            db.execute('UPDATE app_users SET password_hash=? WHERE id=?', (password_hash(password), uid))
+            db.execute('DELETE FROM app_sessions WHERE user_id=?', (uid,))
+            return True
+
+    def create_app_session(self, user_id: int) -> str:
+        """Issue an application-only session, bound to an active application account."""
         token = secrets.token_urlsafe(48)
         expires = (utcnow() + timedelta(hours=8)).isoformat()
         with self.db() as db:
-            db.execute("DELETE FROM app_sessions WHERE expires_at <= ?", (stamp(),))
-            db.execute("INSERT INTO app_sessions(token_hash,expires_at) VALUES (?,?)",
-                       (hashlib.sha256(token.encode()).hexdigest(), expires))
+            if not db.execute('SELECT 1 FROM app_users WHERE id=? AND is_active=1', (user_id,)).fetchone():
+                raise ValueError('Cannot issue a session for an inactive application user')
+            db.execute('DELETE FROM app_sessions WHERE expires_at <= ?', (stamp(),))
+            db.execute('INSERT INTO app_sessions(token_hash,user_id,expires_at) VALUES (?,?,?)',
+                       (hashlib.sha256(token.encode()).hexdigest(), user_id, expires))
+            db.execute('UPDATE app_users SET last_login=? WHERE id=?', (stamp(), user_id))
         return token
 
-    def valid_app_session(self, token: str) -> bool:
+    def app_session_user(self, token: str):
         if not token or len(token) > 256:
-            return False
+            return None
         with self.db() as db:
-            return db.execute("SELECT 1 FROM app_sessions WHERE token_hash=? AND expires_at>?",
-                              (hashlib.sha256(token.encode()).hexdigest(), stamp())).fetchone() is not None
+            return db.execute('''SELECT u.id,u.username,u.display_name,u.email
+                FROM app_sessions s JOIN app_users u ON u.id=s.user_id
+                WHERE s.token_hash=? AND s.expires_at>? AND u.is_active=1''',
+                (hashlib.sha256(token.encode()).hexdigest(), stamp())).fetchone()
+
+    def valid_app_session(self, token: str) -> bool:
+        return self.app_session_user(token) is not None
 
     def revoke_app_session(self, token: str) -> None:
         if not token:
             return
         with self.db() as db:
-            db.execute("DELETE FROM app_sessions WHERE token_hash=?",
+            db.execute('DELETE FROM app_sessions WHERE token_hash=?',
                        (hashlib.sha256(token.encode()).hexdigest(),))
 
     def create_session(self, user_id: int):

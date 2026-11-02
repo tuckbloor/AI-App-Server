@@ -44,6 +44,10 @@ def main(argv=None):
     setup.add_argument("script", type=Path)
     setup.add_argument("--data-dir", type=Path, default=None)
 
+    create_app_user_cmd = sub.add_parser('setup-app-user', help='Create an individual application login on a trusted server terminal')
+    create_app_user_cmd.add_argument('script', type=Path)
+    create_app_user_cmd.add_argument('--data-dir', type=Path, default=None)
+
     doctor = sub.add_parser("doctor", help="Check whether this installation can be deployed in production")
     doctor.add_argument("script", type=Path)
     doctor.add_argument("--data-dir", type=Path, default=None)
@@ -114,6 +118,29 @@ def main(argv=None):
         store.update_password(user['id'], password, email=email)
         store.audit('system', 'first_run_admin_configured', 'admin')
         print('Administrator configured. Verify the email after SMTP has been configured.')
+        return 0
+    if args.command == 'setup-app-user':
+        from .storage import normalized_email, is_strong_password
+        from sqlite3 import IntegrityError
+        try:
+            username = input('Application username (3-60 characters): ').strip()
+            display_name = input('Full name: ').strip()
+            email = input('Email (optional): ').strip()
+            password = getpass('Individual application password (at least 12 characters): ')
+            confirm = getpass('Confirm password: ')
+        except (EOFError, KeyboardInterrupt):
+            print('\nCancelled. No changes made.')
+            return 1
+        import re
+        if not re.fullmatch(r'[A-Za-z0-9_.-]{3,60}', username) or not 1 <= len(display_name) <= 100:
+            parser.error('Username or full name is invalid')
+        if not is_strong_password(password) or password != confirm:
+            parser.error('Passwords must match and contain 12–256 characters')
+        try:
+            Store(data_dir).create_app_user(username, display_name, password, email)
+        except (ValueError, IntegrityError) as exc:
+            parser.error('Cannot create application user: ' + str(exc))
+        print('Application user created; use this account to sign in to the public app.')
         return 0
     if args.command == "doctor":
         for result in production_checks(Store(data_dir), local_only=True):

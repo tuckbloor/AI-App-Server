@@ -60,13 +60,13 @@ def test_upgrade_existing_sqlite_backs_up_and_preserves_admin_connections_roles(
         assert db.execute("SELECT 1 FROM roles WHERE name='Financial Reviewer'").fetchone()
         conn = db.execute("SELECT encrypted_url FROM database_connections WHERE name='Finance SQL'").fetchone()
         assert restored.decrypt(conn[0]) == 'mssql+pyodbc://internal/private'
-    backup_files = list((data / 'backups').glob('server-before-v5-*.sqlite3'))
+    backup_files = list((data / 'backups').glob(f'server-before-v{SCHEMA_VERSION}-*.sqlite3'))
     assert len(backup_files) == 1
     with sqlite3.connect(backup_files[0]) as backup:
         assert backup.execute('PRAGMA user_version').fetchone()[0] == 3
         assert backup.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 1
     Store(data)
-    assert len(list((data / 'backups').glob('server-before-v5-*.sqlite3'))) == 1
+    assert len(list((data / 'backups').glob(f'server-before-v{SCHEMA_VERSION}-*.sqlite3'))) == 1
 
 
 def test_missing_key_must_not_be_silently_regenerated(tmp_path):

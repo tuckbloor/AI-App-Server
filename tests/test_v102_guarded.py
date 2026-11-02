@@ -30,7 +30,7 @@ def test_production_acceptance_config(tmp_path, monkeypatch):
     compose=root/'production/compose.yaml'
     good={'AI_APP_SERVER_PUBLIC_ORIGIN':'https://ai.example.com',
           'AI_APP_SERVER_BEHIND_TLS_PROXY':'1',
-          'AI_APP_SERVER_APP_PASSWORD':'a-unique-production-secret-long-123'}
+          'AI_APP_SERVER_BEHIND_TLS_PROXY':'1'}
     assert all(ok for _,ok in mod.validate(good,compose))
     good['AI_APP_SERVER_PUBLIC_ORIGIN']='http://localhost'
     assert not all(ok for _,ok in mod.validate(good,compose))

@@ -53,6 +53,21 @@ class UserCreate(BaseModel):
     role_id: int
 
 
+class AppUserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=60, pattern=r"^[A-Za-z0-9_.-]+$")
+    display_name: str = Field(min_length=1, max_length=100)
+    email: str = Field(default="", max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class AppUserActive(BaseModel):
+    is_active: bool
+
+
+class AppUserPassword(BaseModel):
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class UserUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     role_id: int | None = None
@@ -429,6 +444,42 @@ def admin_router():
         store.revoke_user_sessions(uid)
         store.audit(actor["username"], "password_reset", target["username"])
         return {"ok":True}
+
+    @router.get('/app-users')
+    def list_application_users(request: Request):
+        require(request, 'manage_users')
+        return {'users': request.app.state.store.list_app_users()}
+
+    @router.post('/app-users', status_code=201)
+    def create_application_user(request: Request, body: AppUserCreate):
+        actor = require(request, 'manage_users', write=True)
+        store = request.app.state.store
+        try:
+            uid = store.create_app_user(body.username, body.display_name, body.password, body.email)
+        except ValueError as exc:
+            error(str(exc))
+        except sqlite3.IntegrityError:
+            error('Application username already exists', 409)
+        store.audit(actor['username'], 'app_user_created', body.username)
+        return {'id': uid, 'ok': True}
+
+    @router.patch('/app-users/{uid}')
+    def set_application_user_active(uid: int, body: AppUserActive, request: Request):
+        actor = require(request, 'manage_users', write=True)
+        store = request.app.state.store
+        if not store.set_app_user_active(uid, body.is_active):
+            error('Application user not found', 404)
+        store.audit(actor['username'], 'app_user_status', str(uid), 'active' if body.is_active else 'disabled')
+        return {'ok':True}
+
+    @router.post('/app-users/{uid}/reset-password')
+    def reset_application_user_password(uid: int, body: AppUserPassword, request: Request):
+        actor = require(request, 'manage_users', write=True)
+        store = request.app.state.store
+        if not store.reset_app_user_password(uid, body.new_password):
+            error('Application user not found', 404)
+        store.audit(actor['username'], 'app_user_password_reset', str(uid))
+        return {'ok':True}
 
     @router.get("/roles")
     def roles(request: Request):

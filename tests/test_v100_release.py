@@ -33,7 +33,7 @@ def fixture_project(tmp_path, monkeypatch, with_tools=True):
     store.update_password(1, 'unique-strong-admin-password-for-testing', email='admin@example.test')
     monkeypatch.setenv('AI_APP_SERVER_BEHIND_TLS_PROXY', '1')
     monkeypatch.setenv('AI_APP_SERVER_PUBLIC_ORIGIN', ORIGIN)
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD', 'unique-strong-application-password-for-test')
+    store.create_app_user('alice', 'Alice Tester', 'unique-strong-application-password-for-test')
     monkeypatch.setenv('AI_APP_SERVER_MCP_TOOLS_APPROVED', '1')
     monkeypatch.setenv('AI_APP_SERVER_MCP_TOOLS_SHA256', hashlib.sha256(tools.read_bytes()).hexdigest() if with_tools else '')
     token = enable(data)
@@ -60,7 +60,7 @@ def test_standard_initialize_protocol_negotiation(tmp_path, monkeypatch):
         info=response.json()['result']
         assert info['protocolVersion']=='2025-11-25'
         assert info['capabilities']['tools']=={'listChanged':False}
-        assert info['serverInfo']['version']=='1.0.3'
+        assert info['serverInfo']['version']=='1.0.4'
         assert client.post('/mcp',json=rpc('notifications/initialized', ident=None), headers=headers(token)).status_code==202
         result=client.post('/mcp',json=rpc('tools/list'),headers=headers(token, '2025-11-25'))
         assert result.status_code==200

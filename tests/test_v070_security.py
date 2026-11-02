@@ -21,7 +21,7 @@ def prepare_production(monkeypatch, tmp_path):
     store.update_password(1, 'Unique-admin-passphrase-2026-very-long', email='boss@example.test')
     monkeypatch.setenv('AI_APP_SERVER_BEHIND_TLS_PROXY', '1')
     monkeypatch.setenv('AI_APP_SERVER_PUBLIC_ORIGIN', ORIGIN)
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD', 'very-unique-private-app-passphrase-123')
+    store.create_app_user('alice', 'Alice Tester', 'very-unique-private-app-passphrase-123')
     return store
 
 
@@ -36,7 +36,7 @@ def test_development_keeps_simple_starter_unlocked(tmp_path, monkeypatch):
 def test_production_rejects_first_run_default_admin_even_when_proxy_configured(monkeypatch, tmp_path):
     monkeypatch.setenv('AI_APP_SERVER_BEHIND_TLS_PROXY', '1')
     monkeypatch.setenv('AI_APP_SERVER_PUBLIC_ORIGIN', ORIGIN)
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD', 'unique-private-passphrase-12345')
+    Store(tmp_path/'data').create_app_user('alice','Alice','a-valid-individual-password-123')
     with pytest.raises(ValueError, match='initial administrator password'):
         create_app(SCRIPT, data_dir=tmp_path / 'data', mode='production')
 
@@ -47,10 +47,12 @@ def test_production_requires_tls_and_password_and_local_binding(monkeypatch, tmp
     with pytest.raises(ValueError, match='TLS reverse proxy'):
         create_app(SCRIPT, data_dir=tmp_path / 'data', mode='production')
     monkeypatch.setenv('AI_APP_SERVER_BEHIND_TLS_PROXY', '1')
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD', 'password')
-    with pytest.raises(ValueError, match='16–256 characters'):
+    with Store(tmp_path / 'data').db() as db:
+        db.execute('UPDATE app_users SET is_active=0')
+    with pytest.raises(ValueError, match='Create at least one active application user'):
         create_app(SCRIPT, data_dir=tmp_path / 'data', mode='production')
-    monkeypatch.setenv('AI_APP_SERVER_APP_PASSWORD', 'unique-private-passphrase-12345')
+    with Store(tmp_path / 'data').db() as db:
+        db.execute('UPDATE app_users SET is_active=1')
     with pytest.raises(ValueError, match='127.0.0.1'):
         create_app(SCRIPT, data_dir=tmp_path / 'data', mode='production', local_only=False)
 
@@ -64,12 +66,12 @@ def test_production_independent_app_login_and_websocket_authorisation(monkeypatc
         assert response.status_code == 303 and response.headers['location'] == '/app-login'
         assert anonymous.get('/app-login').status_code == 200
         assert anonymous.get('/api/admin/me').status_code == 401
-        assert anonymous.post('/api/app/login', json={'password': 'bad'}, headers={'origin': ORIGIN}).status_code == 401
+        assert anonymous.post('/api/app/login', json={'username':'alice','password': 'bad'}, headers={'origin': ORIGIN}).status_code == 401
         with pytest.raises(WebSocketDisconnect) as exc:
             with anonymous.websocket_connect('/ws', headers={'origin': ORIGIN}):
                 pass
         assert exc.value.code == 1008
-        login = anonymous.post('/api/app/login', json={'password': 'very-unique-private-app-passphrase-123'}, headers={'origin': ORIGIN})
+        login = anonymous.post('/api/app/login', json={'username':'alice','password': 'very-unique-private-app-passphrase-123'}, headers={'origin': ORIGIN})
         assert login.status_code == 200
         cookie = login.headers['set-cookie']
         assert 'Secure' in cookie and 'httponly' in cookie.lower()
@@ -105,7 +107,7 @@ def test_existing_data_survives_v5_migration(tmp_path):
         assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
         assert conn.execute("SELECT name FROM sqlite_master WHERE name='app_sessions'").fetchone()
     assert upgraded.user_by_name('admin')['must_change_password'] == 0
-    assert list((tmp_path / 'data' / 'backups').glob('server-before-v5-*'))
+    assert list((tmp_path / 'data' / 'backups').glob(f'server-before-v{SCHEMA_VERSION}-*'))
 
 
 def test_agents_are_optional_and_application_owned(monkeypatch):
@@ -129,9 +131,9 @@ def test_production_app_login_origin_required(monkeypatch, tmp_path):
     prepare_production(monkeypatch, tmp_path)
     app = create_app(SCRIPT, data_dir=tmp_path / 'data', mode='production')
     with TestClient(app, base_url=ORIGIN) as c:
-        assert c.post('/api/app/login', json={'password': 'very-unique-private-app-passphrase-123'}).status_code == 403
-        assert c.post('/api/app/login', json={'password': 'very-unique-private-app-passphrase-123'}, headers={'origin':'https://elsewhere.test'}).status_code == 403
-        assert c.post('/api/app/login', json={'password': 'very-unique-private-app-passphrase-123'}, headers={'origin':ORIGIN}).status_code == 200
+        assert c.post('/api/app/login', json={'username':'alice','password': 'very-unique-private-app-passphrase-123'}).status_code == 403
+        assert c.post('/api/app/login', json={'username':'alice','password': 'very-unique-private-app-passphrase-123'}, headers={'origin':'https://elsewhere.test'}).status_code == 403
+        assert c.post('/api/app/login', json={'username':'alice','password': 'very-unique-private-app-passphrase-123'}, headers={'origin':ORIGIN}).status_code == 200
 
 
 def test_updater_restores_pre_migration_database_on_failed_restart(tmp_path, monkeypatch):

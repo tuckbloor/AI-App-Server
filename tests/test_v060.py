@@ -64,7 +64,7 @@ def assert_db_unchanged(data):
 
 
 def test_version_and_modular_source_layout():
-    assert __version__ == '1.0.3'
+    assert __version__ == '1.0.4'
     assert (PROJECT / 'engine' / 'ai_app_server' / 'server.py').is_file()
     assert not (PROJECT / 'ai_app_server').exists()
     assert (PROJECT / 'starter' / 'app.py').is_file()
