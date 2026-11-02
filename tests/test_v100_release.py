@@ -60,7 +60,7 @@ def test_standard_initialize_protocol_negotiation(tmp_path, monkeypatch):
         info=response.json()['result']
         assert info['protocolVersion']=='2025-11-25'
         assert info['capabilities']['tools']=={'listChanged':False}
-        assert info['serverInfo']['version']=='1.0.2'
+        assert info['serverInfo']['version']=='1.0.3'
         assert client.post('/mcp',json=rpc('notifications/initialized', ident=None), headers=headers(token)).status_code==202
         result=client.post('/mcp',json=rpc('tools/list'),headers=headers(token, '2025-11-25'))
         assert result.status_code==200

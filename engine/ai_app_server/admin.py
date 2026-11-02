@@ -118,6 +118,22 @@ def get_roles(store: Store):
     return [{**dict(r), "permissions": [p["permission"] for p in perms if p["role_id"] == r["id"]]} for r in roles]
 
 
+
+def ensure_role_delegation(store: Store, actor, role_id: int):
+    """A delegated manager cannot assign permissions that they do not possess."""
+    with store.db() as db:
+        role = db.execute("SELECT name FROM roles WHERE id=?", (role_id,)).fetchone()
+        if role is None:
+            error("Role not found", 404)
+        assigned = {r["permission"] for r in db.execute(
+            "SELECT permission FROM role_permissions WHERE role_id=?", (role_id,))}
+    if actor["role"] != "Super Admin" and (
+        role["name"] == "Super Admin" or not assigned.issubset(set(store.permissions(actor)))
+    ):
+        error("Cannot manage a role with permissions beyond your own", 403)
+    return assigned
+
+
 def safe_user_rows(store: Store):
     with store.db() as db:
         users = db.execute("SELECT u.*,r.name role FROM users u JOIN roles r ON r.id=u.role_id ORDER BY u.id").fetchall()
@@ -353,8 +369,7 @@ def admin_router():
             role = db.execute("SELECT * FROM roles WHERE id=?", (body.role_id,)).fetchone()
             if not role:
                 error("Role not found", 404)
-            if role["name"] == "Super Admin" and actor["role"] != "Super Admin":
-                error("Only a Super Admin can create another Super Admin", 403)
+            ensure_role_delegation(store, actor, body.role_id)
             try:
                 db.execute("INSERT INTO users (username,display_name,email,password_hash,role_id,is_active,must_change_password,created_at) VALUES (?,?,?,?,?,1,1,?)",
                            (body.username, body.display_name, body.email, password_hash(body.password), body.role_id, stamp()))
@@ -370,6 +385,9 @@ def admin_router():
         target = store.user_by_id(uid)
         if not target:
             error("User not found", 404)
+        ensure_role_delegation(store, actor, target["role_id"])
+        if body.role_id is not None:
+            ensure_role_delegation(store, actor, body.role_id)
         if (target["role"] == "Super Admin" or body.role_id is not None and
             get_role_name(store, body.role_id) == "Super Admin") and actor["role"] != "Super Admin":
             error("Only a Super Admin can manage Super Admin accounts", 403)
@@ -400,6 +418,7 @@ def admin_router():
         target = store.user_by_id(uid)
         if not target:
             error("User not found", 404)
+        ensure_role_delegation(store, actor, target["role_id"])
         if target["role"] == "Super Admin" and actor["role"] != "Super Admin":
             error("Only a Super Admin can reset a Super Admin password", 403)
         if not is_strong_password(body.new_password):
@@ -422,6 +441,8 @@ def admin_router():
         store = request.app.state.store
         if set(body.permissions) - set(PERMISSIONS):
             error("Unknown permission")
+        if actor["role"] != "Super Admin" and not set(body.permissions).issubset(set(store.permissions(actor))):
+            error("Cannot create a role with permissions beyond your own", 403)
         with store.db() as db:
             try:
                 cur = db.execute("INSERT INTO roles(name,description,is_system) VALUES (?,?,0)",
@@ -438,6 +459,9 @@ def admin_router():
         store = request.app.state.store
         if set(body.permissions) - set(PERMISSIONS):
             error("Unknown permission")
+        ensure_role_delegation(store, actor, rid)
+        if actor["role"] != "Super Admin" and not set(body.permissions).issubset(set(store.permissions(actor))):
+            error("Cannot grant permissions beyond your own", 403)
         with store.db() as db:
             role = db.execute("SELECT * FROM roles WHERE id=?", (rid,)).fetchone()
             if not role:
