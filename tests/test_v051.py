@@ -62,7 +62,7 @@ def test_startup_shortcut_is_user_level_and_project_scoped(tmp_path,monkeypatch)
     shortcut=enable_startup(root)
     assert shortcut.is_file()
     text=shortcut.read_text(encoding='utf-8')
-    assert str(root/'Launch in Background.bat') in text
+    assert str(root/'START.bat') in text
     assert str(shortcut).startswith(str(tmp_path/'Roaming'))
     disable_startup(root)
     assert not shortcut.exists()

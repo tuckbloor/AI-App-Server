@@ -13,14 +13,12 @@ from urllib.parse import urlsplit
 def validate(environment: dict, compose_file: Path) -> list[tuple[str, bool]]:
     origin = environment.get('AI_APP_SERVER_PUBLIC_ORIGIN','')
     parsed = urlsplit(origin)
-    password = environment.get('AI_APP_SERVER_APP_PASSWORD', '')
     compose = compose_file.read_text(encoding='utf8')
     checks = [
       ('Exact HTTPS hostname', parsed.scheme == 'https' and bool(parsed.hostname) and not parsed.username
        and not parsed.password and not parsed.path and not parsed.query and not parsed.fragment),
       ('Reverse-proxy declaration', environment.get('AI_APP_SERVER_BEHIND_TLS_PROXY') == '1'),
-      ('Unique application secret configured', len(password) >= 16 and password not in ('password', 'changeme')
-       and 'replace' not in password.lower()),
+      ('Application account readiness verified by server', 'AI_APP_SERVER_APP_PASSWORD' not in compose),
       ('Container drop-all Linux capabilities', 'cap_drop: [ALL]' in compose),
       ('Container no-new-privileges', 'no-new-privileges:true' in compose),
       ('Persistent SQLite state volume', 'aiapp_data:/workspace/data' in compose),

@@ -69,7 +69,7 @@ def pick_port(script: Path, data: Path) -> tuple[int, bool]:
 def launch(project: Path, *, open_browser: bool = True, timeout: int = 35) -> dict:
     project, script, data = paths(project)
     if not script.is_file():
-        raise FileNotFoundError(f"Missing application: {script}. Please extract the entire ZIP, then run START HERE.bat.")
+        raise FileNotFoundError(f"Missing application: {script}. Please extract the entire ZIP, then run INSTALL.bat.")
     data.mkdir(exist_ok=True, parents=True)
     if read_hosting(data)['mode'] == 'production':
         raise RuntimeError('Production is enabled. Use the documented HTTPS reverse-proxy deployment, not the local one-click launcher.')
@@ -139,9 +139,11 @@ def enable_startup(project: Path):
     project = Path(project).resolve()
     destination = startup_file(project)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    batch = str(project / "Launch in Background.bat").replace('"', '""')
+    # One Windows entrypoint for interactive and silent startup.
+    # Do not point at a separate helper .bat that is absent from the release.
+    batch = str(project / "START.bat").replace('"', '""')
     destination.write_text('Set shell = CreateObject("WScript.Shell")\n'
-                           f'shell.Run Chr(34) & "{batch}" & Chr(34), 0, False\n',
+                           f'shell.Run Chr(34) & "{batch}" & Chr(34) & " --background", 0, False\n',
                            encoding="utf-8")
     print("Background auto-start enabled for your Windows sign-in (no administrator access needed).", flush=True)
     return destination

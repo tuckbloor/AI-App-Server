@@ -24,7 +24,7 @@ def windows_modules():
         import servicemanager
         import winreg
     except ImportError as exc:
-        raise RuntimeError("Windows service support is missing. Run Install Windows Service.bat to set it up.") from exc
+        raise RuntimeError("Windows service support is missing. Install the optional engine[windows-service] dependencies and use the documented service CLI.") from exc
     return win32service, win32serviceutil, win32event, servicemanager, winreg
 
 

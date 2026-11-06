@@ -11,7 +11,7 @@ from ai_app_server.version import __version__
 
 
 def test_release_version():
-    assert __version__ == '1.0.4'
+    assert __version__ == '1.0.5'
 
 
 def test_python_project_layout_isolated(tmp_path):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import ntpath
 import importlib.util
 import json
 import os
@@ -24,8 +25,8 @@ import time
 from urllib.request import urlopen
 from urllib.error import HTTPError
 
-VERSION = '1.0.2'
-ALLOWED = {'0.9.2', '1.0.0', '1.0.1'}
+VERSION = '1.0.3'
+ALLOWED = {'1.0.2'}
 EXTRA = (
     'MCP-MODULE.md',
     'PRODUCTION-SECURITY.md',
@@ -58,6 +59,8 @@ EXTRA = (
     'tests/test_v101_backup_worker.py',
     'tests/test_v101_reliability.py',
     'tests/test_v102_guarded.py',
+    'tests/test_v103_role_security.py',
+    'tests/test_v103_security_smoke.py',
 )
 
 
@@ -177,6 +180,142 @@ def health(port: int, *, require_app_id: bool=True) -> bool:
         return False
 
 
+def expected_app_id(script: Path) -> str:
+    # Identical to ai_app_server.service.service_name(), without importing the
+    # engine that will be swapped during the update.
+    suffix = hashlib.sha256(str(script.resolve()).casefold().encode('utf-8')).hexdigest()[:10]
+    return f'AIAppServer-{suffix}'
+
+
+def health_is_ours(script: Path, port: int) -> bool:
+    """A healthy *different* AI App Server is not ours to stop."""
+    try:
+        with urlopen(f'http://127.0.0.1:{port}/health', timeout=2) as r:
+            info = json.load(r)
+            return info.get('status') == 'ok' and info.get('app_id') == expected_app_id(script)
+    except (OSError, ValueError):
+        return False
+
+
+def windows_command_tokens(command_line: str) -> list[str]:
+    """Use the Windows API; shlex does not implement Windows quoting rules."""
+    import ctypes
+    from ctypes import wintypes
+    count = ctypes.c_int()
+    api = ctypes.windll.shell32.CommandLineToArgvW
+    api.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    api.restype = ctypes.POINTER(wintypes.LPWSTR)
+    ptr = api(command_line, ctypes.byref(count))
+    if not ptr:
+        raise RuntimeError('Could not inspect the listening process command line')
+    try:
+        return [ptr[i] for i in range(count.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        ctypes.windll.kernel32.LocalFree.restype = ctypes.c_void_p
+        ctypes.windll.kernel32.LocalFree(ctypes.cast(ptr, ctypes.c_void_p))
+
+
+def validate_server_process(command_tokens: list[str], exe: str, root: Path,
+                            script: Path, port: int) -> bool:
+    """Match an exact CLI, script, data directory, Python interpreter and port."""
+    if not command_tokens or not exe:
+        return False
+    def winpath(value: str) -> str:
+        return ntpath.normcase(ntpath.normpath(value.strip('"')))
+    # On Windows, CPython 3.14 can launch an active venv with the *base*
+    # Python executable shown as Win32_Process.ExecutablePath. The command may
+    # consequently say C:\\Users\\...\\pythonw.exe even while the project
+    # is using E:\\ai-app-server\\.venv. An exact venv/Scripts-only check
+    # incorrectly rejects this legitimate process.
+    #
+    # Trust only the interpreter paths declared by THIS project's venv, and
+    # then separately check the exact CLI, project script, data path and port.
+    # This never turns into an unrestricted PID match on a shared machine.
+    names = ('python.exe', 'pythonw.exe')
+    allowed = {winpath(str(root / '.venv' / 'Scripts' / name)) for name in names}
+    venv_config = root / '.venv' / 'pyvenv.cfg'
+    if venv_config.is_file():
+        try:
+            for line in venv_config.read_text(encoding='utf-8-sig').splitlines():
+                key, sep, value = line.partition('=')
+                if not sep or not value.strip():
+                    continue
+                if key.strip().lower() == 'home':
+                    home = value.strip().strip('"')
+                    for name in names:
+                        allowed.add(winpath(ntpath.join(home, name)))
+                elif key.strip().lower() == 'executable':
+                    base_exe = value.strip().strip('"')
+                    # The venv config often names python.exe but the background
+                    # launcher uses the pythonw.exe next to it.
+                    if ntpath.basename(winpath(base_exe)) in names:
+                        for name in names:
+                            allowed.add(winpath(ntpath.join(ntpath.dirname(base_exe), name)))
+        except (OSError, UnicodeError):
+            return False
+    if winpath(exe) not in allowed:
+        return False
+    # CPython virtual environments can expose a base interpreter as WMI's
+    # executable while the process command line names the virtualenv launcher.
+    # Both must be among the interpreter paths trusted for THIS venv.
+    if winpath(command_tokens[0]) not in allowed:
+        return False
+    try:
+        module = command_tokens.index('-m')
+        if command_tokens[module + 1] != 'ai_app_server.cli':
+            return False
+        run = command_tokens.index('run', module + 2)
+        if winpath(command_tokens[run + 1]) != winpath(str(script)):
+            return False
+        data = command_tokens.index('--data-dir')
+        if winpath(command_tokens[data + 1]) != winpath(str(root / 'data')):
+            return False
+        port_arg = command_tokens.index('--port')
+        if int(command_tokens[port_arg + 1]) != port:
+            return False
+    except (ValueError, IndexError):
+        return False
+    return True
+
+
+def windows_port_owner(root: Path, script: Path, port: int) -> int | None:
+    """Resolve a listening port to one verified process. Never guess a PID."""
+    if os.name != 'nt':
+        return None
+    # Even if the command line matches, do not adopt an unrelated web app.
+    if not health_is_ours(script, port):
+        return None
+    ps = (
+        "$ErrorActionPreference='Stop'; "
+        f"$connections=@(Get-NetTCPConnection -LocalPort {port} -State Listen | "
+        "Where-Object { $_.LocalAddress -eq '127.0.0.1' }); "
+        "$out=@(foreach($c in $connections) { "
+        '$p=Get-CimInstance Win32_Process -Filter "ProcessId = $($c.OwningProcess)"; '
+        'if($p) { [pscustomobject]@{ pid=[int]$p.ProcessId; exe=[string]$p.ExecutablePath; cmd=[string]$p.CommandLine } } '
+        '}); @($out) | ConvertTo-Json -Compress'
+    )
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', ps],
+                                capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            return None
+        records = json.loads(result.stdout)
+        if isinstance(records, dict):
+            records = [records]
+        if not isinstance(records, list):
+            return None
+        verified = {
+            int(rec['pid']) for rec in records
+            if isinstance(rec, dict) and rec.get('cmd') and
+            validate_server_process(windows_command_tokens(rec['cmd']), rec.get('exe', ''),
+                                    root, script, port)
+        }
+        return next(iter(verified)) if len(verified) == 1 else None
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired):
+        return None
+
+
 def smoke(root: Path, engine: Path, snapshot: Path, log: Path) -> None:
     """Exercise a shadow server using disposable restored data, never live data."""
     shadow = snapshot.parent / 'canary'
@@ -240,7 +379,7 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
     engine = root/'engine'
     current = version(engine)
     if current not in ALLOWED:
-        raise RuntimeError(f'Expected an existing v0.9.2 / v1.0.x installation; found {current}. Nothing changed.')
+        raise RuntimeError(f'Expected a working v1.0.2 installation; found {current}. Nothing changed.')
     if data_mode(root) == 'production':
         raise RuntimeError('Desktop updates are for local installs only. Deploy production with versioned container images and tested volumes.')
     if (engine/'pyproject.toml').read_bytes() != (release/'payload/engine/pyproject.toml').read_bytes():
@@ -249,10 +388,53 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
     if not app_script.is_file():
         raise RuntimeError('Existing application app.py is missing; no changes made')
     port = config_port(root)
+    runtime = root / 'data/runtime.json'
+    original_runtime = runtime.is_file()
+    original_runtime_bytes = runtime.read_bytes() if original_runtime else None
+    recovered_pid = None
+    initial_running = False
+    # This v0.9.2 issue is common after failed upgrade rollbacks: a valid
+    # background server can still own the port after runtime.json is lost.
+    # Resolve and verify the owner before touching the live application.
+    if not available(port):
+        if not health_is_ours(app_script, port):
+            raise RuntimeError(f'Port {port} is used by another server. Nothing changed.')
+        initial_running = True
+        if original_runtime:
+            # A running v0.9.2 background installation has a runtime.json with
+            # its PID, script and port. Use the *existing* desktop launcher to
+            # perform the actual stop: it checks the live process command line
+            # (module + script) before terminating the recorded PID.
+            #
+            # Previous updaters incorrectly required a second interpreter-path
+            # identity check here. Python 3.14 on Windows can expose the base
+            # pythonw.exe via WMI, although it was launched through the venv.
+            # That rejected legitimate installations before they were updated.
+            try:
+                record = json.loads(original_runtime_bytes)
+                if (int(record['pid']) <= 0 or int(record['port']) != port or
+                    os.path.normcase(os.path.normpath(record['script'])) !=
+                    os.path.normcase(os.path.normpath(str(app_script.resolve())))):
+                    raise ValueError('Recorded process does not belong to this application')
+            except (ValueError, TypeError, KeyError, OSError) as err:
+                raise RuntimeError('The background process record is inconsistent. '
+                                   'Nothing changed. Stop this application using '
+                                   'START.bat --stop, then run the installer again.') from err
+        elif os.name == 'nt':
+            # Recovery path for installations missing runtime.json. Still
+            # requires exact app health and an independently validated PID.
+            recovered_pid = windows_port_owner(root, app_script, port)
+            if recovered_pid is None:
+                raise RuntimeError(f'Cannot safely stop the server on port {port} without its process record. '
+                                   'Nothing changed. Stop it with START.bat --stop, '
+                                   'then run INSTALL.bat again.')
+        else:
+            raise RuntimeError(f'Port {port} is busy without a process record; nothing changed')
     if dry_run:
-        return {'before':current, 'after':VERSION, 'dry_run':True}
+        return {'before':current, 'after':VERSION, 'dry_run':True,
+                'port':port, 'recognised_pid':recovered_pid}
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    backup = root/'backups'/f'guarded-v102-{stamp}'
+    backup = root/'backups'/f'guarded-v103-{stamp}'
     backup.parent.mkdir(parents=True, exist_ok=True)
     backup.mkdir()
     stage = backup/'incoming-engine'
@@ -261,11 +443,6 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
     changed_support = []
     swapped = False
     stopped = False
-    original_runtime = (root/'data/runtime.json').is_file()
-    # Never stop an unknown process: the Windows launcher verifies its PID
-    # against the application's executable and exact script path.
-    if not original_runtime and not available(port):
-        raise RuntimeError(f'Port {port} is busy but the server is not identifiable; refusing update')
     try:
         shutil.copytree(release/'payload/engine', stage)
         candidate = recovery_module(stage)
@@ -273,17 +450,24 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
         candidate.verify_snapshot(backup/'snapshot')
         print('1/4 Testing the candidate server on a separate local port...', flush=True)
         engine_import(root, stage, 'from ai_app_server.server import create_app; '
-                      'from ai_app_server.version import __version__; assert __version__=="1.0.2"; '
+                      'from ai_app_server.version import __version__; assert __version__=="1.0.3"; '
                       'from pathlib import Path; import sys; '
                       'app=create_app(Path(sys.argv[1]),data_dir=Path(sys.argv[2])); '
-                      'assert any(r.path == "/health" for r in app.routes)',
+                      'assert any(getattr(r, "path", None) == "/health" for r in app.routes)',
                       str(app_script), str(backup/'snapshot'/'data'))
         smoke(root, stage, backup/'snapshot', backup/'canary.log')
         print('2/4 Candidate passed. Stopping only this application...', flush=True)
-        if original_runtime:
+        if recovered_pid is not None:
+            # Rehydrate the missing/stale runtime record only after the shadow
+            # server passes preflight. Existing v0.9.2 stop() then checks the
+            # process command line a second time before invoking taskkill.
+            runtime.write_text(json.dumps({'pid': recovered_pid,
+                                           'script': str(app_script.resolve()),
+                                           'port': port}), encoding='utf-8')
+        if original_runtime or recovered_pid is not None:
             command(root, '-m', 'ai_app_server.desktop_launcher', 'stop', '--project', str(root))
             stopped = True
-            if (root/'data/runtime.json').exists():
+            if runtime.exists():
                 raise RuntimeError('Server process has not stopped safely')
         wait_free(port)
         # Take a second consistent snapshot AFTER stopping so changes made
@@ -294,7 +478,7 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
         swapped = True
         stage.rename(engine)
         print('3/4 Starting upgraded server and checking its real address...', flush=True)
-        engine_import(root, engine, 'from ai_app_server.version import __version__; assert __version__=="1.0.2"')
+        engine_import(root, engine, 'from ai_app_server.version import __version__; assert __version__=="1.0.3"')
         command(root, '-m', 'ai_app_server.desktop_launcher', 'start', '--project', str(root), '--no-browser', timeout=80)
         if config_port(root) != port or not health(port):
             raise RuntimeError('Upgraded server did not respond on the original port')
@@ -315,6 +499,13 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
         print('4/4 Health verified; backup retained.', flush=True)
         return {'before':current,'after':VERSION,'port':port,'backup':str(backup)}
     except Exception as exc:
+        # If the only side effect so far was repairing a missing/stale runtime
+        # marker and we have not stopped the server, undo that marker.
+        if not stopped and not swapped and recovered_pid is not None:
+            if original_runtime_bytes is None:
+                runtime.unlink(missing_ok=True)
+            else:
+                runtime.write_bytes(original_runtime_bytes)
         # Partial update is never reported as success; try restoration and
         # re-start immediately. Keep logs/backups for diagnosis.
         for relative in reversed(changed_support):
@@ -335,7 +526,7 @@ def install(root: Path, release: Path, *, dry_run=False) -> dict:
             old.rename(engine)
             candidate.restore_snapshot(root, backup/'rollback-state')
         # Even when preflight failed, a formerly running server should remain online.
-        if (swapped or stopped) and available(port):
+        if (swapped or stopped or initial_running) and available(port):
             restart = command(root,'-m','ai_app_server.desktop_launcher','start',
                               '--project',str(root),'--no-browser',check=False,timeout=80)
             if restart.returncode != 0 or not health(port):

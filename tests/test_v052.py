@@ -1,35 +1,31 @@
-"""Windows one-click launcher path regression tests."""
+"""Portable Windows entrypoint regression checks."""
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
-SCRIPTS = [
-    "START HERE.bat",
-    "Open AI App Server.bat",
-    "Launch in Background.bat",
-    "Stop AI App Server.bat",
-    "Disable Automatic Startup.bat",
-]
+SCRIPTS = ['INSTALL.bat', 'START.bat']
 
-def test_all_launchers_change_into_project_dir():
+
+def test_exactly_two_windows_launchers():
+    assert sorted(x.name for x in PROJECT.rglob('*.bat')) == sorted(SCRIPTS)
+
+
+def test_both_launcher_paths_are_relative_to_the_script():
     for name in SCRIPTS:
-        body = (PROJECT / name).read_text(encoding="utf-8")
-        assert 'cd /d "%~dp0"' in body, name
+        data = (PROJECT / name).read_text(encoding='utf8')
+        assert 'cd /d "%~dp0"' in data
+        assert 'E:\\' not in data and 'E:/' not in data
 
-def test_no_launchers_pass_trailing_backslash_folder_as_quoted_argument():
+
+def test_launcher_actions_and_background_startup():
+    assert 'portable_install.py' in (PROJECT / 'INSTALL.bat').read_text(encoding='utf8')
+    assert 'desktop_launcher' in (PROJECT / 'START.bat').read_text(encoding='utf8')
+    assert '--background' in (PROJECT / 'START.bat').read_text(encoding='utf8')
+    assert 'START.bat' in (PROJECT / 'engine/ai_app_server/desktop_launcher.py').read_text(encoding='utf8')
+
+
+def test_starter_application_and_compatible_windows_line_endings():
+    assert (PROJECT / 'starter/app.py').is_file()
     for name in SCRIPTS:
-        body = (PROJECT / name).read_text(encoding="utf-8")
-        assert '--project "%~dp0"' not in body, name
-
-def test_start_command_uses_cwd_default_project():
-    for name in SCRIPTS:
-        body = (PROJECT / name).read_text(encoding="utf-8")
-        assert '-m ai_app_server.desktop_launcher' in body
-    assert 'install' in (PROJECT / 'START HERE.bat').read_text(encoding='utf-8')
-
-def test_example_application_is_in_archive_source():
-    assert (PROJECT / 'starter' / 'app.py').is_file()
-
-def test_batch_file_line_endings_are_windows_compatible():
-    for name in SCRIPTS:
-        data=(PROJECT / name).read_bytes()
-        assert b'\r\n' in data and b'\n' not in data.replace(b'\r\n',b''), name
+        contents=(PROJECT / name).read_bytes()
+        assert b'\r\n' in contents
+        assert b'\n' not in contents.replace(b'\r\n',b'')

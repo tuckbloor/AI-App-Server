@@ -5,7 +5,7 @@ services:
     build:
       context: ..
       dockerfile: production/Dockerfile
-    image: ai-app-server-local:1.0.2
+    image: ai-app-server-local:1.0.5
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
@@ -32,7 +32,6 @@ services:
     environment:
       AI_APP_SERVER_BEHIND_TLS_PROXY: '1'
       AI_APP_SERVER_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN in production/.env}
-      AI_APP_SERVER_APP_PASSWORD: ${AI_APP_SERVER_APP_PASSWORD:?Set AI_APP_SERVER_APP_PASSWORD in production/.env}
       AI_APP_SERVER_MCP_TOOLS_APPROVED: ${AI_APP_SERVER_MCP_TOOLS_APPROVED:-0}
       AI_APP_SERVER_MCP_TOOLS_SHA256: ${AI_APP_SERVER_MCP_TOOLS_SHA256:-}
     volumes:
@@ -47,7 +46,7 @@ services:
   # Daily verified application/database snapshots in a separate Docker volume.
   # Copy these snapshots OFF THE HOST for true disaster recovery.
   backup:
-    image: ai-app-server-local:1.0.2
+    image: ai-app-server-local:1.0.5
     command: ["python", "/workspace/production/backup_worker.py"]
     depends_on: [ai-app]
     restart: unless-stopped

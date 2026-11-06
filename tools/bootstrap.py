@@ -34,7 +34,7 @@ def prepare(root: Path) -> dict:
             result = subprocess.run([sys.executable, "-m", "ai_app_server.desktop_launcher", "stop"],
                                     cwd=str(root), capture_output=True, text=True, timeout=30)
             if result.returncode:
-                raise RuntimeError("Stop the old server using Stop AI App Server.bat before upgrading. "
+                raise RuntimeError("Stop the old server before upgrading (START.bat --stop). "
                                    + (result.stderr or result.stdout).strip())
         backups = root / "backups"
         backups.mkdir(parents=True, exist_ok=True)

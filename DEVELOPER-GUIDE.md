@@ -1,16 +1,18 @@
-# AI App Server — developer guide (v0.6.0)
+# AI App Server — Developer Guide (v1.0.5)
 
 AI App Server is a **Python-to-browser application framework**. You do not need Streamlit, Node, or a separate hosted service. Every part of the public app UI comes from **your own Python source**.
 
 ## Create a new app
 
-From PowerShell (assuming the package source is at `E:\ai-app-server`):
+From PowerShell (set `$server` to the folder you chose during installation):
 
 ```powershell
-mkdir E:\my-ai-project
-cd E:\my-ai-project
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e E:\ai-app-server\engine
+$server = Read-Host "Full path to your installed AI App Server"
+$project = Join-Path $HOME "my-ai-project"
+New-Item -ItemType Directory -Path $project -Force | Out-Null
+Set-Location $project
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e "$server\engine"
 ```
 
 Create `app.py`:
@@ -89,4 +91,4 @@ Reset links expire after 30 minutes and can be used once. Administrators can res
 
 ## Modular upgrades
 
-Since v0.6.0, the installed framework lives in `engine/` and everything the developer owns remains outside it. Use `UPDATE ENGINE.bat` and select a future release ZIP. Only the engine is swapped. The updater saves a consistent SQLite snapshot and previous engine; it never overwrites existing `app/`, `examples/`, `config/` or `data/`. Development `app.py` scripts should not be stored within the framework engine.
+Since v0.6.0, the installed framework lives in `engine/` and everything the developer owns remains outside it. Use a verified engine-upgrade procedure for a future version. Only the engine should be swapped. The updater saves a consistent SQLite snapshot and previous engine; it never overwrites existing `app/`, `examples/`, `config/` or `data/`. Development `app.py` scripts should not be stored within the framework engine.

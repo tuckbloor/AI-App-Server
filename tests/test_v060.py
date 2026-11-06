@@ -64,11 +64,11 @@ def assert_db_unchanged(data):
 
 
 def test_version_and_modular_source_layout():
-    assert __version__ == '1.0.4'
+    assert __version__ == '1.0.5'
     assert (PROJECT / 'engine' / 'ai_app_server' / 'server.py').is_file()
     assert not (PROJECT / 'ai_app_server').exists()
     assert (PROJECT / 'starter' / 'app.py').is_file()
-    assert (PROJECT / 'UPDATE ENGINE.bat').is_file()
+    assert (PROJECT / 'INSTALL.bat').is_file() and (PROJECT / 'START.bat').is_file()
 
 
 def test_first_install_creates_app_but_does_not_overwrite_it(tmp_path):

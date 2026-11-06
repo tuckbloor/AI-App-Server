@@ -22,16 +22,10 @@ backups/
 production/.env
 production/*.key
 production/*.pem
+
+# Local install-only files
+.install-incomplete.json
+
+# Private developer-owned applications inside a local installation
 app/
-.env.*
-!.env.example
-!.env.smtp.example
-!production/.env.example
-*.db
-*.db-*
-*.pem
-*.key
-*.p12
-*.pfx
-.secret-key
-.idea/
+examples/

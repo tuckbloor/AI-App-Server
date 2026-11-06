@@ -28,3 +28,21 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install -e './engine' pip-audit
       - run: python -m pip_audit
+
+  windows-clean-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install bundled full project to a directory with spaces
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'A Different Drive Folder'
+          python tools/portable_install.py --target "$target" --no-start
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$target\.venv\Scripts\python.exe" -c "import ai_app_server; print(ai_app_server.__file__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$target\.venv\Scripts\python.exe" -m ai_app_server.desktop_launcher status --project "$target"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

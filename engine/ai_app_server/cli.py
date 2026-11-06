@@ -186,7 +186,7 @@ def main(argv=None):
             print(f"Application: http://127.0.0.1:{args.port}/")
         print(f"Admin panel: {configured_origin() if args.mode == 'production' else f'http://127.0.0.1:{args.port}'}/admin")
         print(f"Private system data: {data_dir}")
-        print("\nPress Ctrl+C to stop. Use START HERE.bat for automatic background startup on Windows.\n")
+        print("\nPress Ctrl+C to stop. Use START.bat for background startup on Windows.\n")
         uvicorn.run(create_app(args.script, data_dir=data_dir, mode=args.mode,
                                secure_cookies=args.mode == "production", local_only=localhost),
                     host=args.host, port=args.port, proxy_headers=False, ws_max_size=65536)

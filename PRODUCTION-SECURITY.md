@@ -7,7 +7,7 @@ privileges, so never expose untrusted executable code or unrestricted agent tool
 
 ## Modes
 
-- **Development:** HTTP on localhost only. No certificate required. Use `START HERE.bat`.
+- **Development:** HTTP on localhost only. No certificate required. Use `START.bat`.
 - **Production:** Restricted Python process and separate HTTPS reverse proxy,
   configured public origin, strong application gate password, and a non-default
   administrator password. `ai-app-server doctor` must pass before deployment.
@@ -42,8 +42,8 @@ privileges, so never expose untrusted executable code or unrestricted agent tool
 
 1. Download `AI-App-Server-v0.9.0-OVERLAY.zip`.
 2. Extract it beside the existing app so the folders are siblings:
-   `E:\ai-app-server` and `E:\AI-App-Server-v0.9.0-OVERLAY`.
-3. Double-click `INSTALL UPDATE.bat` in the overlay folder. No manual backups.
+   `<installation-folder>` and `<downloaded-release>`.
+3. Follow a verified version-specific upgrade procedure. The portable INSTALL.bat is for new installations only.
 4. The updater stops only that installation, creates a verified local recovery
    snapshot and previous-engine copy, applies the new engine, and restarts it if
    it was already running. It will attempt rollback if a step fails.

@@ -6,7 +6,7 @@ This module is **optional** and **disabled by default**. MCP configuration is sa
 
 1. Run your AI App Server normally, then sign in to `/admin`.
 2. Open **MCP**. It shows your app's endpoint, its registered tools, and a button to enable MCP.
-3. Create your custom tool file at `E:\ai-app-server\app\mcp_tools.py` (or `mcp_tools.py` next to your own Python app script). Tools are loaded when the app server starts. Restart once after adding or changing tools.
+3. Create your custom tool file at `<installation-folder>\app\mcp_tools.py` (or `mcp_tools.py` next to your own Python app script). Tools are loaded when the app server starts. Restart once after adding or changing tools.
 4. Select **Enable MCP and create token**, then copy the token immediately. No app data or administrator passwords are affected.
 5. Configure your compatible MCP client to use `http://127.0.0.1:<your-port>/mcp` with `Authorization: Bearer YOUR_TOKEN`. For remote access you **must use HTTPS** and properly configured production security.
 
